@@ -1,4 +1,4 @@
-package persistence
+package report
 
 import (
 	"context"

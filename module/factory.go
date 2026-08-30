@@ -8,7 +8,7 @@ import (
 	reportsdk "github.com/domainry/domainry-report-sdk"
 	"github.com/domainry/domainry-report-sdk/modulehost"
 	reportrepository "github.com/domainry/domainry-report-sdk/repository"
-	reportpersistence "github.com/domainry/domainry-report/internal/persistence"
+	reportpersistence "github.com/domainry/domainry-report/internal/infrastructure/persistence/database/report"
 )
 
 type Factory struct{}
