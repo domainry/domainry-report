@@ -12,10 +12,10 @@ import (
 const SchemaVersion uint = 1
 
 var definitionTables = []string{
-	"report_definitions",
-	"operation_state_example_definitions",
-	"sensitive_field_policy_definitions",
-	"report_export_control_definitions",
+	"_report_definitions",
+	"_report_operation_state_examples",
+	"_report_sensitive_field_policies",
+	"_report_export_controls",
 }
 
 func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, error) {
@@ -50,7 +50,7 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 }
 
 func reportSnapshotLatestIndex(driver ormdialect.Name, renderer modulehost.Dialect) ([]string, error) {
-	builder := ormschema.NewIndex(renderer, "idx_report_snapshot_latest", "report_snapshots").Columns("workspace_id", "report_key", "access_scope_hash", "status", "refreshed_at")
+	builder := ormschema.NewIndex(renderer, "idx_report_snapshot_latest", "_report_snapshots").Columns("workspace_id", "report_key", "access_scope_hash", "status", "refreshed_at")
 	if driver != ormdialect.MySQL {
 		statement, _, err := builder.IfNotExists().Build()
 		return []string{statement}, err
@@ -65,7 +65,7 @@ func reportSnapshotLatestIndex(driver ormdialect.Name, renderer modulehost.Diale
 	// duplicate-index failure; the rendered DDL remains ORM-authored.
 	escaped := strings.ReplaceAll(statement, "'", "''")
 	return []string{
-		"SET @domainry_report_index_sql = (SELECT IF(COUNT(*) = 0, '" + escaped + "', 'SELECT 1') FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'report_snapshots' AND index_name = 'idx_report_snapshot_latest')",
+		"SET @domainry_report_index_sql = (SELECT IF(COUNT(*) = 0, '" + escaped + "', 'SELECT 1') FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = '_report_snapshots' AND index_name = 'idx_report_snapshot_latest')",
 		"PREPARE domainry_report_index_stmt FROM @domainry_report_index_sql",
 		"EXECUTE domainry_report_index_stmt",
 		"DEALLOCATE PREPARE domainry_report_index_stmt",
@@ -84,7 +84,7 @@ func definitionTable(renderer modulehost.Dialect, name string) *ormschema.TableB
 }
 
 func reportSnapshotTable(renderer modulehost.Dialect) *ormschema.TableBuilder {
-	return ormschema.NewTable(renderer, "report_snapshots").IfNotExists().Columns(
+	return ormschema.NewTable(renderer, "_report_snapshots").IfNotExists().Columns(
 		required("id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)),
 		required("report_key", ormschema.TextKey(191)), required("access_scope_hash", ormschema.TextKey(191)),
 		required("idempotency_key", ormschema.TextKey(191)), required("status", ormschema.TextKey(32)),

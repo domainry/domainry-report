@@ -23,10 +23,10 @@ func NewDefinitionStore(database modulehost.Database, dialect modulehost.Dialect
 }
 
 var reportDefinitionTable = map[string]string{
-	"report":                  "report_definitions",
-	"operation_state_example": "operation_state_example_definitions",
-	"sensitive_field_policy":  "sensitive_field_policy_definitions",
-	"report_export_control":   "report_export_control_definitions",
+	"report":                  "_report_definitions",
+	"operation_state_example": "_report_operation_state_examples",
+	"sensitive_field_policy":  "_report_sensitive_field_policies",
+	"report_export_control":   "_report_export_controls",
 }
 
 func (s DefinitionStore) SyncDefinitions(ctx context.Context, snapshot reportrepository.DefinitionSnapshot) error {

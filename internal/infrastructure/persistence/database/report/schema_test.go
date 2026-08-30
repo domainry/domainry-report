@@ -19,7 +19,7 @@ func TestReportOwnsAllDefinitionAndSnapshotTablesAcrossDialects(t *testing.T) {
 			t.Fatalf("driver=%s migrations=%#v", driver, migrations)
 		}
 		joined := strings.Join(migrations[0].Statements, "\n")
-		for _, table := range append(append([]string{}, definitionTables...), "report_snapshots") {
+		for _, table := range append(append([]string{}, definitionTables...), "_report_snapshots") {
 			if !strings.Contains(joined, table) {
 				t.Fatalf("driver=%s missing table %s", driver, table)
 			}
