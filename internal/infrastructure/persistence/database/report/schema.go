@@ -2,9 +2,9 @@ package report
 
 import (
 	"fmt"
+	ormschema "github.com/domainry/domainry-orm/schema"
 	"strings"
 
-	ormbuilder "github.com/domainry/domainry-orm/builder"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	"github.com/domainry/domainry-report-sdk/modulehost"
 )
@@ -50,7 +50,7 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 }
 
 func reportSnapshotLatestIndex(driver ormdialect.Name, renderer modulehost.Dialect) ([]string, error) {
-	builder := ormbuilder.NewCreateIndexBuilder(renderer, "idx_report_snapshot_latest", "report_snapshots").Columns("workspace_id", "report_key", "access_scope_hash", "status", "refreshed_at")
+	builder := ormschema.NewIndex(renderer, "idx_report_snapshot_latest", "report_snapshots").Columns("workspace_id", "report_key", "access_scope_hash", "status", "refreshed_at")
 	if driver != ormdialect.MySQL {
 		statement, _, err := builder.IfNotExists().Build()
 		return []string{statement}, err
@@ -72,34 +72,34 @@ func reportSnapshotLatestIndex(driver ormdialect.Name, renderer modulehost.Diale
 	}, nil
 }
 
-func definitionTable(renderer modulehost.Dialect, name string) *ormbuilder.CreateTableBuilder {
-	return ormbuilder.NewCreateTableBuilder(renderer, name).WithoutSystemColumns().IfNotExists().Columns(
-		required("id", ormbuilder.TextKeyType(255)), required("resource_key", ormbuilder.TextKeyType(255)),
-		required("object_key", ormbuilder.TextKeyType(255)), required("name", ormbuilder.TextType()),
-		required("payload_json", ormbuilder.LongTextType()), required("schema_version", ormbuilder.TextKeyType(255)),
-		required("schema_hash", ormbuilder.TextKeyType(255)), required("source_kind", ormbuilder.TextKeyType(255)),
-		required("source_id", ormbuilder.TextKeyType(255)), optional("disabled_at", ormbuilder.TextKeyType(255)),
-		required("created_at", ormbuilder.TextKeyType(255)), required("updated_at", ormbuilder.TextKeyType(255)),
+func definitionTable(renderer modulehost.Dialect, name string) *ormschema.TableBuilder {
+	return ormschema.NewTable(renderer, name).IfNotExists().Columns(
+		required("id", ormschema.TextKey(255)), required("resource_key", ormschema.TextKey(255)),
+		required("object_key", ormschema.TextKey(255)), required("name", ormschema.Text()),
+		required("payload_json", ormschema.LongText()), required("schema_version", ormschema.TextKey(255)),
+		required("schema_hash", ormschema.TextKey(255)), required("source_kind", ormschema.TextKey(255)),
+		required("source_id", ormschema.TextKey(255)), optional("disabled_at", ormschema.TextKey(255)),
+		required("created_at", ormschema.TextKey(255)), required("updated_at", ormschema.TextKey(255)),
 	).PrimaryKey("id").Unique("resource_key")
 }
 
-func reportSnapshotTable(renderer modulehost.Dialect) *ormbuilder.CreateTableBuilder {
-	return ormbuilder.NewCreateTableBuilder(renderer, "report_snapshots").WithoutSystemColumns().IfNotExists().Columns(
-		required("id", ormbuilder.TextKeyType(255)), required("workspace_id", ormbuilder.TextKeyType(191)),
-		required("report_key", ormbuilder.TextKeyType(191)), required("access_scope_hash", ormbuilder.TextKeyType(191)),
-		required("idempotency_key", ormbuilder.TextKeyType(191)), required("status", ormbuilder.TextKeyType(32)),
-		required("summary_json", ormbuilder.LongTextType()), required("watermark", ormbuilder.TextKeyType(255)),
-		required("source_versions_json", ormbuilder.LongTextType()), required("row_count", ormbuilder.BigIntType()),
-		required("source_row_count", ormbuilder.BigIntType()), required("started_at", ormbuilder.TextKeyType(255)),
-		required("refreshed_at", ormbuilder.TextKeyType(255)), required("error_code", ormbuilder.TextKeyType(255)),
-		required("lease_owner", ormbuilder.TextKeyType(255)), required("lease_expires_at", ormbuilder.TextKeyType(255)),
-		required("fencing_token", ormbuilder.BigIntType()),
+func reportSnapshotTable(renderer modulehost.Dialect) *ormschema.TableBuilder {
+	return ormschema.NewTable(renderer, "report_snapshots").IfNotExists().Columns(
+		required("id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)),
+		required("report_key", ormschema.TextKey(191)), required("access_scope_hash", ormschema.TextKey(191)),
+		required("idempotency_key", ormschema.TextKey(191)), required("status", ormschema.TextKey(32)),
+		required("summary_json", ormschema.LongText()), required("watermark", ormschema.TextKey(255)),
+		required("source_versions_json", ormschema.LongText()), required("row_count", ormschema.BigInt()),
+		required("source_row_count", ormschema.BigInt()), required("started_at", ormschema.TextKey(255)),
+		required("refreshed_at", ormschema.TextKey(255)), required("error_code", ormschema.TextKey(255)),
+		required("lease_owner", ormschema.TextKey(255)), required("lease_expires_at", ormschema.TextKey(255)),
+		required("fencing_token", ormschema.BigInt()),
 	).PrimaryKey("id").Unique("workspace_id", "id").Unique("workspace_id", "report_key", "access_scope_hash", "idempotency_key")
 }
 
-func required(name string, kind ormbuilder.ColumnType) ormbuilder.SchemaColumn {
-	return ormbuilder.DefineColumn(name, kind).NotNull()
+func required(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition {
+	return ormschema.Column(name, kind).NotNull()
 }
-func optional(name string, kind ormbuilder.ColumnType) ormbuilder.SchemaColumn {
-	return ormbuilder.DefineColumn(name, kind)
+func optional(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition {
+	return ormschema.Column(name, kind)
 }
