@@ -25,6 +25,7 @@ type Field struct {
 }
 
 type Object struct {
+	Key    string
 	Fields []Field
 }
 

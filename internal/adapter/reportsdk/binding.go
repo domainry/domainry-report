@@ -2,34 +2,81 @@ package reportsdk
 
 import (
 	"context"
+	"fmt"
+	"sync"
 
 	sdk "github.com/domainry/domainry-report-sdk"
+	"github.com/domainry/domainry-report-sdk/modulehost"
 	reportpersistence "github.com/domainry/domainry-report-sdk/persistence"
 	reportapplication "github.com/domainry/domainry-report/internal/application/report"
 )
 
 type Binding struct {
-	service reportapplication.Service
+	service   reportapplication.Service
+	mu        sync.RWMutex
+	queries   sdk.Queries
+	snapshots sdk.SnapshotCommands
+	exports   sdk.Exports
 }
 
-func NewBinding(service reportapplication.Service) Binding {
-	return Binding{service: service}
+func NewBinding(service reportapplication.Service) *Binding {
+	return &Binding{service: service}
 }
 
-func (Binding) Descriptor() sdk.Descriptor {
-	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV2, Mode: sdk.DeploymentModeModule, Capabilities: []string{"definitions.sync", "snapshots.manage"}}
+func (*Binding) Descriptor() sdk.Descriptor {
+	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV3, Mode: sdk.DeploymentModeModule, Capabilities: []string{
+		sdk.CapabilityDefinitionsSync, sdk.CapabilityQueriesExecute, sdk.CapabilitySnapshotsManage, sdk.CapabilityExportsManage, sdk.CapabilityHTTPSurface,
+	}}
 }
 
-func (Binding) Close(context.Context) error { return nil }
+func (*Binding) Close(context.Context) error { return nil }
 
-func (b Binding) Definitions() reportpersistence.DefinitionRepository { return b.service.Definitions() }
-
-func (b Binding) Snapshots() reportpersistence.SnapshotRepository { return b.service.Snapshots() }
-
-// DefinitionRepository preserves repository.Binding compatibility.
-func (b Binding) DefinitionRepository() reportpersistence.DefinitionRepository {
+func (b *Binding) Definitions() reportpersistence.DefinitionRepository {
 	return b.service.Definitions()
 }
 
-var _ sdk.Binding = Binding{}
-var _ reportpersistence.Binding = Binding{}
+func (b *Binding) Snapshots() reportpersistence.SnapshotRepository { return b.service.Snapshots() }
+
+// DefinitionRepository preserves repository.Binding compatibility.
+func (b *Binding) DefinitionRepository() reportpersistence.DefinitionRepository {
+	return b.service.Definitions()
+}
+
+func (b *Binding) BindApplicationHost(host modulehost.ApplicationHost) error {
+	if host == nil || host.ReportSubjects() == nil || host.ReportDatasets() == nil || host.ReportObjectSQL() == nil || host.ReportSourceVersions() == nil || host.ReportExecutionAudit() == nil || host.ReportExportAuthorization() == nil || host.ReportSnapshotTerminals() == nil || host.ReportExports() == nil || len(host.ReportCursorSigningKey()) == 0 {
+		return fmt.Errorf("Report application host is incomplete")
+	}
+	definitions := storedDefinitionProvider{repository: b.service.Definitions()}
+	queries := reportapplication.NewQueryService(host, definitions, b.service.Snapshots())
+	snapshots := reportapplication.NewSnapshotService(queries, b.service.Snapshots(), host.ReportSnapshotTerminals(), host.ReportClock())
+	exports := reportapplication.NewExportService(queries, definitions, host.ReportExportAuthorization(), host.ReportExports())
+	b.mu.Lock()
+	b.queries = queries
+	b.snapshots = snapshots
+	b.exports = exports
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *Binding) Exports() sdk.Exports {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.exports
+}
+
+func (b *Binding) SnapshotCommands() sdk.SnapshotCommands {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.snapshots
+}
+
+func (b *Binding) Queries() sdk.Queries {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.queries
+}
+
+var _ sdk.Binding = (*Binding)(nil)
+var _ sdk.ApplicationHostBinder = (*Binding)(nil)
+var _ sdk.ApplicationBinding = (*Binding)(nil)
+var _ reportpersistence.Binding = (*Binding)(nil)

@@ -23,6 +23,7 @@ func TestReportUsesInternalLayeredLayout(t *testing.T) {
 		"internal/domain/report/model",
 		"internal/domain/report/repository",
 		"internal/domain/report/service/engine",
+		"internal/domain/report/service/export",
 		"internal/domain/report/service/objectsql",
 		"internal/domain/report/service/plan",
 		"internal/adapter/reportsdk",

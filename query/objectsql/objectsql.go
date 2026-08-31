@@ -19,6 +19,19 @@ var OrderContains = domainobjectsql.OrderContains
 var SafeCrossWorkspaceAggregatePlan = domainobjectsql.SafeCrossWorkspaceAggregatePlan
 var ExpressionHasAggregate = domainobjectsql.ExpressionHasAggregate
 
+const (
+	ReportObjectSQLDefaultLimitRows = domainobjectsql.ReportObjectSQLDefaultLimitRows
+	ReportObjectSQLMaximumLimitRows = domainobjectsql.ReportObjectSQLMaximumLimitRows
+)
+
+func CompileReportObjectSQL(schema reportmodel.ReportObjectSQLSchema, objects map[string]reportengine.Object) (reportmodel.ReportObjectSQLPlan, error) {
+	return domainobjectsql.CompileReportObjectSQL(schema, objects)
+}
+
+func ReportObjectSQLPlanSingleRow(plan reportmodel.ReportObjectSQLPlan) bool {
+	return domainobjectsql.ReportObjectSQLPlanSingleRow(plan)
+}
+
 func BuildDatasetPlan(dataset reportmodel.ReportDatasetSchema, aliasObjects map[string]string, aliases []string, selectFields map[string][]string, objects map[string]reportengine.Object) (DatasetPlan, error) {
 	return domainobjectsql.BuildDatasetPlan(dataset, aliasObjects, aliases, selectFields, objects)
 }
