@@ -1,4 +1,4 @@
-package report
+package schema
 
 import (
 	"fmt"
@@ -9,8 +9,6 @@ import (
 	"github.com/domainry/domainry-report-sdk/modulehost"
 )
 
-const SchemaVersion uint = 1
-
 var definitionTables = []string{
 	"_report_definitions",
 	"_report_operation_state_examples",
@@ -18,7 +16,11 @@ var definitionTables = []string{
 	"_report_export_controls",
 }
 
-func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, error) {
+func DefinitionTables() []string {
+	return append([]string(nil), definitionTables...)
+}
+
+func Statements(driver, schema string) ([]string, error) {
 	parsed, err := ormdialect.Parse(driver)
 	if err != nil {
 		return nil, fmt.Errorf("Report database driver %q is unsupported: %w", driver, err)
@@ -46,7 +48,7 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 		return nil, fmt.Errorf("build Report snapshot latest index: %w", err)
 	}
 	statements = append(statements, latestStatements...)
-	return []modulehost.SchemaMigration{{Version: SchemaVersion, Name: "report_foundation", Statements: statements}}, nil
+	return statements, nil
 }
 
 func reportSnapshotLatestIndex(driver ormdialect.Name, renderer modulehost.Dialect) ([]string, error) {

@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
-	ormbuilder "github.com/domainry/domainry-orm/query"
+	"github.com/domainry/domainry-orm/query"
 	"github.com/domainry/domainry-report-sdk/modulehost"
-	reportrepository "github.com/domainry/domainry-report-sdk/repository"
+	reportpersistence "github.com/domainry/domainry-report-sdk/persistence"
+	reportschema "github.com/domainry/domainry-report/internal/infrastructure/persistence/database/schema"
 )
 
 type DefinitionStore struct {
@@ -29,7 +30,7 @@ var reportDefinitionTable = map[string]string{
 	"report_export_control":   "_report_export_controls",
 }
 
-func (s DefinitionStore) SyncDefinitions(ctx context.Context, snapshot reportrepository.DefinitionSnapshot) error {
+func (s DefinitionStore) SyncDefinitions(ctx context.Context, snapshot reportpersistence.DefinitionSnapshot) error {
 	if s.database == nil || s.dialect == nil {
 		return fmt.Errorf("Report definition store is unavailable")
 	}
@@ -42,9 +43,9 @@ func (s DefinitionStore) SyncDefinitions(ctx context.Context, snapshot reportrep
 	}
 	defer func() { _ = tx.Rollback() }()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	for _, table := range definitionTables {
-		statement, args, err := ormbuilder.NewUpdateBuilder(s.dialect, table).Set("disabled_at", now).Where(ormbuilder.And(
-			ormbuilder.Equal("source_kind", snapshot.SourceKind), ormbuilder.Equal("source_id", snapshot.SourceID), ormbuilder.IsNull("disabled_at"),
+	for _, table := range reportschema.DefinitionTables() {
+		statement, args, err := query.NewUpdateBuilder(s.dialect, table).Set("disabled_at", now).Where(query.And(
+			query.Equal("source_kind", snapshot.SourceKind), query.Equal("source_id", snapshot.SourceID), query.IsNull("disabled_at"),
 		)).Build()
 		if err != nil {
 			return err
@@ -60,12 +61,12 @@ func (s DefinitionStore) SyncDefinitions(ctx context.Context, snapshot reportrep
 			return fmt.Errorf("Report definition identity is invalid")
 		}
 		sum := sha256.Sum256(definition.Payload)
-		update, args, err := ormbuilder.NewUpdateBuilder(s.dialect, table).
+		update, args, err := query.NewUpdateBuilder(s.dialect, table).
 			Set("object_key", strings.TrimSpace(definition.ObjectKey)).Set("name", strings.TrimSpace(definition.Name)).
 			Set("payload_json", definition.Payload).Set("schema_version", snapshot.SchemaVersion).
 			Set("schema_hash", hex.EncodeToString(sum[:])).Set("source_kind", snapshot.SourceKind).
 			Set("source_id", snapshot.SourceID).Set("disabled_at", nil).Set("updated_at", now).
-			Where(ormbuilder.Equal("resource_key", key)).Build()
+			Where(query.Equal("resource_key", key)).Build()
 		if err != nil {
 			return err
 		}
@@ -80,7 +81,7 @@ func (s DefinitionStore) SyncDefinitions(ctx context.Context, snapshot reportrep
 		if affected > 0 {
 			continue
 		}
-		statement, args, err := ormbuilder.NewInsertBuilder(s.dialect, table).Columns(
+		statement, args, err := query.NewInsertBuilder(s.dialect, table).Columns(
 			"id", "resource_key", "object_key", "name", "payload_json", "schema_version", "schema_hash", "source_kind", "source_id", "disabled_at", "created_at", "updated_at",
 		).Values(definition.ResourceType+":"+key, key, strings.TrimSpace(definition.ObjectKey), strings.TrimSpace(definition.Name), definition.Payload, snapshot.SchemaVersion, hex.EncodeToString(sum[:]), snapshot.SourceKind, snapshot.SourceID, nil, now, now).Build()
 		if err != nil {
@@ -93,23 +94,23 @@ func (s DefinitionStore) SyncDefinitions(ctx context.Context, snapshot reportrep
 	return tx.Commit()
 }
 
-func (s DefinitionStore) DefinitionSnapshot(ctx context.Context) (reportrepository.DefinitionSnapshot, error) {
-	result := reportrepository.DefinitionSnapshot{Definitions: []reportrepository.Definition{}}
+func (s DefinitionStore) DefinitionSnapshot(ctx context.Context) (reportpersistence.DefinitionSnapshot, error) {
+	result := reportpersistence.DefinitionSnapshot{Definitions: []reportpersistence.Definition{}}
 	for resourceType, table := range reportDefinitionTable {
-		statement, args, err := ormbuilder.NewSelectBuilder(s.dialect, table).Columns("resource_key", "object_key", "name", "payload_json", "schema_version", "source_kind", "source_id").Where(ormbuilder.IsNull("disabled_at")).OrderBy(ormbuilder.Ascending("resource_key")).Build()
+		statement, args, err := query.NewSelectBuilder(s.dialect, table).Columns("resource_key", "object_key", "name", "payload_json", "schema_version", "source_kind", "source_id").Where(query.IsNull("disabled_at")).OrderBy(query.Ascending("resource_key")).Build()
 		if err != nil {
-			return reportrepository.DefinitionSnapshot{}, err
+			return reportpersistence.DefinitionSnapshot{}, err
 		}
 		rows, err := s.database.QueryContext(ctx, statement, args...)
 		if err != nil {
-			return reportrepository.DefinitionSnapshot{}, err
+			return reportpersistence.DefinitionSnapshot{}, err
 		}
 		for rows.Next() {
-			var value reportrepository.Definition
+			var value reportpersistence.Definition
 			var version, sourceKind, sourceID string
 			if err := rows.Scan(&value.Key, &value.ObjectKey, &value.Name, &value.Payload, &version, &sourceKind, &sourceID); err != nil {
 				rows.Close()
-				return reportrepository.DefinitionSnapshot{}, err
+				return reportpersistence.DefinitionSnapshot{}, err
 			}
 			value.ResourceType = resourceType
 			result.Definitions = append(result.Definitions, value)
@@ -119,11 +120,11 @@ func (s DefinitionStore) DefinitionSnapshot(ctx context.Context) (reportreposito
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return reportrepository.DefinitionSnapshot{}, err
+			return reportpersistence.DefinitionSnapshot{}, err
 		}
 		rows.Close()
 	}
 	return result, nil
 }
 
-var _ reportrepository.DefinitionRepository = DefinitionStore{}
+var _ reportpersistence.DefinitionRepository = DefinitionStore{}

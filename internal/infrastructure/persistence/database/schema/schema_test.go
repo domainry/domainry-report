@@ -1,4 +1,4 @@
-package report
+package schema
 
 import (
 	"strings"
@@ -7,7 +7,7 @@ import (
 
 func TestReportOwnsAllDefinitionAndSnapshotTablesAcrossDialects(t *testing.T) {
 	for _, driver := range []string{"sqlite", "postgres", "mysql"} {
-		migrations, err := SchemaMigrations(driver, "report_scope")
+		statements, err := Statements(driver, "report_scope")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -15,10 +15,10 @@ func TestReportOwnsAllDefinitionAndSnapshotTablesAcrossDialects(t *testing.T) {
 		if driver == "mysql" {
 			wantStatements = 9
 		}
-		if len(migrations) != 1 || len(migrations[0].Statements) != wantStatements {
-			t.Fatalf("driver=%s migrations=%#v", driver, migrations)
+		if len(statements) != wantStatements {
+			t.Fatalf("driver=%s statements=%#v", driver, statements)
 		}
-		joined := strings.Join(migrations[0].Statements, "\n")
+		joined := strings.Join(statements, "\n")
 		for _, table := range append(append([]string{}, definitionTables...), "_report_snapshots") {
 			if !strings.Contains(joined, table) {
 				t.Fatalf("driver=%s missing table %s", driver, table)
