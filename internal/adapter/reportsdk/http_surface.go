@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
@@ -35,15 +36,21 @@ func (*reportHTTPSurface) Name() string            { return "business" }
 func (s *reportHTTPSurface) Handler() http.Handler { return s.handler }
 
 func (*reportHTTPSurface) Routes() []modulehttp.Route {
-	public := []modulehttp.Exposure{modulehttp.ExposurePublic}
-	principal := func(pattern string, effect modulehttp.EffectClass, idempotency, audit string) modulehttp.Route {
-		return modulehttp.Route{Pattern: pattern, Exposures: public, Authentication: modulehttp.AuthenticationAuthenticated, PrincipalOnly: true, Governance: &modulehttp.Governance{EffectClass: effect, HighRiskPolicy: modulehttp.HighRiskNone, IdempotencyDecision: idempotency, AuditClass: audit}}
+	principal := func(key, pattern, label string, effect actioncontract.EffectClass, risk actioncontract.RiskLevel, idempotency, audit string, approvals ...actioncontract.ApprovalPolicy) modulehttp.Route {
+		method, route, _ := strings.Cut(pattern, " ")
+		return modulehttp.Route{Action: actioncontract.ActionDefinition{
+			Key: key, Owner: "module:report", SourceKind: "module_surface", CapabilityKey: "report.business", CapabilityLabel: "Business reports",
+			OperationKey: key[strings.LastIndex(key, ".")+1:], OperationLabel: label, Label: label,
+			Exposures: []actioncontract.Exposure{actioncontract.ExposurePublic}, Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticatedPrincipal},
+			HTTP: &actioncontract.HTTPBinding{Method: method, RouteTemplate: route}, EffectClass: effect, RiskLevel: risk,
+			ApprovalPolicies: approvals, IdempotencyDecision: idempotency, AuditClass: audit, LifecycleStatus: actioncontract.LifecycleActive,
+		}}
 	}
 	return []modulehttp.Route{
-		principal("GET /reports/{reportKey}/summary", modulehttp.EffectRead, "not_applicable", "owner_read_audit_policy"),
-		principal("POST /reports/{reportKey}/query", modulehttp.EffectRead, "not_applicable", "owner_read_audit_policy"),
-		principal("POST /reports/{reportKey}/snapshots/refresh", modulehttp.EffectWrite, "caller_key_required", "mutation_audit_required"),
-		{Pattern: "POST /reports/{reportKey}/exports/{objectKey}/prepare", Exposures: public, Authentication: modulehttp.AuthenticationAuthenticated, PrincipalOnly: true, Governance: &modulehttp.Governance{EffectClass: modulehttp.EffectWrite, HighRiskPolicy: modulehttp.HighRiskConfirmationRequired, IdempotencyDecision: "caller_key_required", AuditClass: "business_export_prepare_audit"}},
+		principal("report.summary.get", "GET /reports/{reportKey}/summary", "Get report summary", actioncontract.EffectRead, actioncontract.RiskLow, "not_applicable", "owner_read_audit_policy"),
+		principal("report.query.execute", "POST /reports/{reportKey}/query", "Execute report query", actioncontract.EffectRead, actioncontract.RiskLow, "not_applicable", "owner_read_audit_policy"),
+		principal("report.snapshots.refresh", "POST /reports/{reportKey}/snapshots/refresh", "Refresh report snapshot", actioncontract.EffectWrite, actioncontract.RiskMedium, "caller_key_required", "mutation_audit_required"),
+		principal("report.exports.prepare", "POST /reports/{reportKey}/exports/{objectKey}/prepare", "Prepare report export", actioncontract.EffectWrite, actioncontract.RiskHigh, "caller_key_required", "business_export_prepare_audit", actioncontract.ApprovalConfirmation),
 	}
 }
 

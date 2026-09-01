@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
@@ -64,17 +65,17 @@ func TestReportHTTPSurfaceOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
 		t.Fatalf("routes=%d want=%d", len(routes), len(wantPatterns))
 	}
 	for index, route := range routes {
-		if route.Pattern != wantPatterns[index] {
-			t.Fatalf("route[%d]=%q want=%q", index, route.Pattern, wantPatterns[index])
+		if route.Pattern() != wantPatterns[index] {
+			t.Fatalf("route[%d]=%q want=%q", index, route.Pattern(), wantPatterns[index])
 		}
-		if route.Authentication != modulehttp.AuthenticationAuthenticated || !route.PrincipalOnly || !reflect.DeepEqual(route.Exposures, []modulehttp.Exposure{modulehttp.ExposurePublic}) || route.Governance == nil {
+		if route.Action.Authorization.Strategy != "authenticated_principal" || route.Action.Permission != nil || !reflect.DeepEqual(route.Action.Exposures, []modulehttp.Exposure{modulehttp.ExposurePublic}) {
 			t.Fatalf("route[%d] authorization/governance=%#v", index, route)
 		}
 	}
-	if governance := routes[1].Governance; governance.EffectClass != modulehttp.EffectRead || governance.IdempotencyDecision != "not_applicable" {
+	if governance := routes[1].Action; governance.EffectClass != "read" || governance.IdempotencyDecision != "not_applicable" {
 		t.Fatalf("Object SQL query governance=%#v", governance)
 	}
-	if governance := routes[3].Governance; governance.EffectClass != modulehttp.EffectWrite || governance.HighRiskPolicy != modulehttp.HighRiskConfirmationRequired || governance.IdempotencyDecision != "caller_key_required" {
+	if governance := routes[3].Action; governance.EffectClass != "write" || !reflect.DeepEqual(governance.ApprovalPolicies, []actioncontract.ApprovalPolicy{actioncontract.ApprovalConfirmation}) || governance.IdempotencyDecision != "caller_key_required" {
 		t.Fatalf("export prepare governance=%#v", governance)
 	}
 	operations := surface.OpenAPIOperations()
