@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
+	reportquery "github.com/domainry/domainry-report-sdk/query"
 )
 
 // Record is the minimum, source-owned representation required by Report's
@@ -15,19 +16,10 @@ type Record struct {
 	UpdatedAt string
 }
 
-// Field and Object carry only metadata that affects Report calculations. They
-// deliberately exclude Runtime definition, authorization, and persistence data.
-type Field struct {
-	Key       string
-	Type      string
-	Precision int
-	Scale     int32
-}
-
-type Object struct {
-	Key    string
-	Fields []Field
-}
+// Field and Object are SDK-owned portable metadata. The execution engine keeps
+// aliases so its business implementation never republishes a second shape.
+type Field = reportquery.Field
+type Object = reportquery.Object
 
 type AggregateResult struct {
 	Rows              []reportmodel.ReportResultRow

@@ -97,6 +97,9 @@ func TestReportHTTPSurfaceOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
 		t.Fatalf("summary total semantics=%v", semantics)
 	}
 	prepare := operations[wantPatterns[3]]
+	if !reportOpenAPIHasParameter(reportOpenAPIParameters(prepare), "Idempotency-Key") {
+		t.Fatalf("export prepare OpenAPI is missing caller idempotency key")
+	}
 	responses := prepare["responses"].(map[string]any)
 	if responses["202"] == nil || responses["200"] != nil {
 		t.Fatalf("export prepare responses=%#v", responses)

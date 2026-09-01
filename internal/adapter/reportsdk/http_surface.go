@@ -56,6 +56,7 @@ func (*reportHTTPSurface) OpenAPIOperations() map[string]map[string]any {
 	queryParameter := func(name string, schema map[string]any) map[string]any {
 		return map[string]any{"name": name, "in": "query", "required": false, "schema": schema}
 	}
+	idempotencyKey := map[string]any{"name": "Idempotency-Key", "in": "header", "required": true, "schema": map[string]any{"type": "string", "minLength": 1}}
 	return map[string]map[string]any{
 		"GET /reports/{reportKey}/summary": {
 			"operationId": "getReportSummary", "tags": []string{"Reports"}, "summary": "Execute an authorized report summary",
@@ -74,11 +75,11 @@ func (*reportHTTPSurface) OpenAPIOperations() map[string]map[string]any {
 		},
 		"POST /reports/{reportKey}/snapshots/refresh": {
 			"operationId": "refreshReportSnapshot", "tags": []string{"Reports"}, "summary": "Refresh a materialized report snapshot",
-			"security": security, "parameters": []any{reportKey, map[string]any{"name": "Idempotency-Key", "in": "header", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": standardOpenAPIResponses("200", "Report snapshot", reportSnapshotOpenAPISchema()),
+			"security": security, "parameters": []any{reportKey, idempotencyKey}, "responses": standardOpenAPIResponses("200", "Report snapshot", reportSnapshotOpenAPISchema()),
 		},
 		"POST /reports/{reportKey}/exports/{objectKey}/prepare": {
 			"operationId": "prepareReportExport", "tags": []string{"Reports"}, "summary": "Prepare a governed report export",
-			"security": security, "parameters": []any{reportKey, pathParameter("objectKey")},
+			"security": security, "parameters": []any{reportKey, pathParameter("objectKey"), idempotencyKey},
 			"requestBody": jsonRequestBody(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"audit_id", "scope"}, "properties": map[string]any{"audit_id": map[string]any{"type": "string"}, "scope": reportExportScopeOpenAPISchema()}}),
 			"responses":   standardOpenAPIResponses("202", "Accepted report export job", reportExportJobOpenAPISchema()),
 		},

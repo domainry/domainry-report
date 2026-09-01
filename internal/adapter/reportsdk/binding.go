@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/domainry/domainry-foundation/modulecapability"
 	sdk "github.com/domainry/domainry-report-sdk"
 	"github.com/domainry/domainry-report-sdk/modulehost"
 	reportpersistence "github.com/domainry/domainry-report-sdk/persistence"
@@ -12,15 +13,29 @@ import (
 )
 
 type Binding struct {
-	service   reportapplication.Service
-	mu        sync.RWMutex
-	queries   sdk.Queries
-	snapshots sdk.SnapshotCommands
-	exports   sdk.Exports
+	service    reportapplication.Service
+	mu         sync.RWMutex
+	queries    sdk.Queries
+	snapshots  sdk.SnapshotCommands
+	exports    sdk.Exports
+	capability modulecapability.Binding
 }
 
-func NewBinding(service reportapplication.Service) *Binding {
-	return &Binding{service: service}
+func NewBinding(service reportapplication.Service, capability modulecapability.Binding) (*Binding, error) {
+	if capability == nil {
+		return nil, fmt.Errorf("Report capability binding is required")
+	}
+	return &Binding{service: service, capability: capability}, nil
+}
+
+func (b *Binding) CapabilitySummary(ctx context.Context) (modulecapability.ModuleSummary, error) {
+	return b.capability.CapabilitySummary(ctx)
+}
+func (b *Binding) CapabilityCategory(ctx context.Context, key string) (modulecapability.CategoryDocument, error) {
+	return b.capability.CapabilityCategory(ctx, key)
+}
+func (b *Binding) ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
+	return b.capability.ValidateCapabilityCandidate(ctx, request)
 }
 
 func (*Binding) Descriptor() sdk.Descriptor {

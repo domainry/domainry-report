@@ -2,14 +2,13 @@ package export
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/domainry/domainry-foundation/apperror"
+	reportcontract "github.com/domainry/domainry-report-sdk/contract"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
 )
 
@@ -112,11 +111,7 @@ func defaultReportTimeZone(report reportmodel.ReportSchema) string {
 }
 
 func CanonicalJSONSHA256(value any) (string, error) {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return "", err
-	}
-	return SHA256Hex(encoded), nil
+	return reportcontract.CanonicalJSONSHA256(value)
 }
 
 func canonicalJSONEqual(left, right any) bool {
@@ -148,24 +143,11 @@ func reportMetricDefinitionsEqual(requested, expected []reportmodel.ReportMetric
 }
 
 func SHA256Hex(content []byte) string {
-	digest := sha256.Sum256(content)
-	return hex.EncodeToString(digest[:])
+	return reportcontract.SHA256Hex(content)
 }
 
 func SafeFilename(reportKey, objectKey string) string {
-	clean := func(value string) string {
-		value = strings.TrimSpace(value)
-		var result strings.Builder
-		for _, char := range value {
-			if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_' {
-				result.WriteRune(char)
-			} else {
-				result.WriteByte('_')
-			}
-		}
-		return strings.Trim(result.String(), "_")
-	}
-	return clean(reportKey) + "-" + clean(objectKey) + ".csv"
+	return reportcontract.SafeExportFilename(reportKey, objectKey)
 }
 
 func exportScopeError(code string) error {

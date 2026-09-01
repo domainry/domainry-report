@@ -3,7 +3,7 @@ package objectsql
 
 import (
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
-	domainobjectsql "github.com/domainry/domainry-report/internal/domain/report/service/objectsql"
+	domainobjectsql "github.com/domainry/domainry-report-sdk/query/objectsql"
 	reportengine "github.com/domainry/domainry-report/query/engine"
 )
 

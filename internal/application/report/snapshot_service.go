@@ -139,9 +139,10 @@ func snapshotModel(snapshot reportpersistence.Snapshot) (reportmodel.ReportSnaps
 func snapshotNotification(reportKey, idempotencyKey, status, errorCode string, subject reportmodel.ReportSubject, now time.Time) notificationmodel.NotificationIntent {
 	sourceID := "report-snapshot:" + strings.TrimSpace(reportKey) + ":" + strings.TrimSpace(idempotencyKey) + ":" + status
 	return notificationmodel.NotificationIntent{
-		WorkspaceID: subject.Principal.WorkspaceID, SourceEventID: sourceID, EventType: "report.snapshot." + status,
+		ID: sourceID, WorkspaceID: subject.Principal.WorkspaceID, SourceEventID: sourceID, EventType: "report.snapshot." + status,
 		Surface: "business_workspace", RecipientUserIDs: []string{subject.Principal.UserID}, SubjectType: "report",
-		SubjectID: strings.TrimSpace(reportKey), DedupeKey: sourceID, OccurredAt: now.UTC().Format(time.RFC3339Nano),
+		SubjectID: strings.TrimSpace(reportKey), SubjectVersion: strings.TrimSpace(idempotencyKey) + ":" + status,
+		DedupeKey: sourceID, OccurredAt: now.UTC().Format(time.RFC3339Nano),
 		Variables: map[string]any{"report_key": strings.TrimSpace(reportKey), "status": status, "error_code": errorCode},
 	}
 }

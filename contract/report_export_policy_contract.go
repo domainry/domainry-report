@@ -1,7 +1,7 @@
 package contract
 
-import reportexport "github.com/domainry/domainry-report/internal/domain/report/service/export"
+import reportsdkcontract "github.com/domainry/domainry-report-sdk/contract"
 
-var CanonicalReportJSONSHA256 = reportexport.CanonicalJSONSHA256
-var ReportSHA256Hex = reportexport.SHA256Hex
-var SafeReportExportFilename = reportexport.SafeFilename
+var CanonicalReportJSONSHA256 = reportsdkcontract.CanonicalJSONSHA256
+var ReportSHA256Hex = reportsdkcontract.SHA256Hex
+var SafeReportExportFilename = reportsdkcontract.SafeExportFilename

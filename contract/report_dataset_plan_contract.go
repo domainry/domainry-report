@@ -3,10 +3,10 @@
 package contract
 
 import (
+	reportsdkcontract "github.com/domainry/domainry-report-sdk/contract"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
-	reportplan "github.com/domainry/domainry-report/internal/domain/report/service/plan"
 )
 
 func BuildReportDatasetPlan(report reportmodel.ReportSchema) (reportmodel.ReportDatasetPlan, error) {
-	return reportplan.BuildReportDatasetPlan(report)
+	return reportsdkcontract.BuildReportDatasetPlan(report)
 }

@@ -6,6 +6,7 @@ import (
 
 	reportsdk "github.com/domainry/domainry-report-sdk"
 	"github.com/domainry/domainry-report-sdk/modulehost"
+	reportcapability "github.com/domainry/domainry-report/capability"
 	reportadapter "github.com/domainry/domainry-report/internal/adapter/reportsdk"
 	reportapplication "github.com/domainry/domainry-report/internal/application/report"
 	reportmigration "github.com/domainry/domainry-report/internal/infrastructure/persistence/database/migration"
@@ -30,8 +31,12 @@ func (*Factory) Open(ctx context.Context, application reportsdk.ApplicationRef, 
 	if err := host.Migrations().ApplyOwnedMigrations(ctx, "report", migrations); err != nil {
 		return nil, fmt.Errorf("apply Report Module migrations: %w", err)
 	}
+	capability, err := reportcapability.Open(reportcapability.Inputs{})
+	if err != nil {
+		return nil, fmt.Errorf("build Report capability disclosure: %w", err)
+	}
 	return reportadapter.NewBinding(reportapplication.NewService(
 		reportpersistence.NewDefinitionStore(host.Database(), host.Dialect()),
 		reportpersistence.NewReportSnapshotStore(host),
-	)), nil
+	), capability)
 }
