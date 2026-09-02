@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"sync"
 
+	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulecapability"
+	"github.com/domainry/domainry-foundation/modulehttp"
 	sdk "github.com/domainry/domainry-report-sdk"
 	"github.com/domainry/domainry-report-sdk/modulehost"
 	reportpersistence "github.com/domainry/domainry-report-sdk/persistence"
@@ -18,6 +20,7 @@ type Binding struct {
 	queries    sdk.Queries
 	snapshots  sdk.SnapshotCommands
 	exports    sdk.Exports
+	surfaces   []modulehttp.Surface
 	capability modulecapability.Binding
 }
 
@@ -65,12 +68,21 @@ func (b *Binding) BindApplicationHost(host modulehost.ApplicationHost) error {
 	queries := reportapplication.NewQueryService(host, definitions, b.service.Snapshots())
 	snapshots := reportapplication.NewSnapshotService(queries, b.service.Snapshots(), host.ReportSnapshotTerminals(), host.ReportClock())
 	exports := reportapplication.NewExportService(queries, definitions, host.ReportExportAuthorization(), host.ReportExports())
+	surface, err := newReportHTTPSurface(b)
+	if err != nil {
+		return fmt.Errorf("build Report HTTP surface: %w", err)
+	}
 	b.mu.Lock()
 	b.queries = queries
 	b.snapshots = snapshots
 	b.exports = exports
+	b.surfaces = []modulehttp.Surface{surface}
 	b.mu.Unlock()
 	return nil
+}
+
+func (*Binding) AuthorizationActions() ([]actioncontract.ActionDefinition, error) {
+	return reportapplication.AuthorizationActions()
 }
 
 func (b *Binding) Exports() sdk.Exports {
@@ -95,3 +107,4 @@ var _ sdk.Binding = (*Binding)(nil)
 var _ sdk.ApplicationHostBinder = (*Binding)(nil)
 var _ sdk.ApplicationBinding = (*Binding)(nil)
 var _ reportpersistence.Binding = (*Binding)(nil)
+var _ actioncontract.Provider = (*Binding)(nil)

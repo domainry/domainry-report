@@ -8,13 +8,14 @@ import (
 
 	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
+	reportsdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
 	reportquery "github.com/domainry/domainry-report-sdk/query"
 	reportobjectsql "github.com/domainry/domainry-report/internal/domain/report/service/objectsql"
 	reportplan "github.com/domainry/domainry-report/internal/domain/report/service/plan"
 )
 
-const reportBusinessCategory = "report.business"
+const reportBusinessCategory = reportsdk.CapabilityReportBusiness
 
 type reportObjectAuthoringFragment struct {
 	Key            string                               `json:"key"`
@@ -45,7 +46,10 @@ type reportObjectFieldAuthoringFragment struct {
 }
 
 func NewCapabilityBinding(validator modulecapability.Validator) (*modulecapability.StaticBinding, error) {
-	surface := newReportHTTPSurface(&Binding{})
+	routes, operations, err := reportHTTPContract()
+	if err != nil {
+		return nil, err
+	}
 	document, err := modulecapability.CategoryFromHTTPRoutes(modulecapability.HTTPRouteCategory{
 		Owner: "report",
 		Category: modulecapability.CategorySummary{
@@ -53,7 +57,7 @@ func NewCapabilityBinding(validator modulecapability.Validator) (*modulecapabili
 			AssemblyChains:   []string{"identity_scope_to_report_execution", "scheduler_to_report_snapshot_refresh", "report_export_to_data_exchange_job", "report_result_to_notification_delivery"},
 			ValidationScopes: []string{"report.definition"},
 		},
-		Routes: surface.Routes(), Operations: surface.OpenAPIOperations(),
+		Routes: routes, Operations: operations,
 		Components: map[string]map[string]json.RawMessage{
 			"schemas":         {"Error": json.RawMessage(`{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"message":{"type":"string"},"params":{"type":"object","additionalProperties":{"type":"string"}}},"additionalProperties":false}`)},
 			"securitySchemes": {"BearerAuth": json.RawMessage(`{"type":"http","scheme":"bearer","bearerFormat":"JWT"}`)},

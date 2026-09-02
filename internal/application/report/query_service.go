@@ -166,7 +166,7 @@ func reportVisibleToSubject(report reportmodel.ReportSchema, subject reportmodel
 		return false
 	}
 	if reportmodel.ReportCrossWorkspaceAggregate(report) {
-		return strings.TrimSpace(subject.Principal.RoleKey) == "superadmin" && len(report.RequiredPermissions) > 0
+		return len(report.RequiredPermissions) > 0
 	}
 	return true
 }

@@ -3,31 +3,53 @@ package reportsdk
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
-	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
+	reportapplication "github.com/domainry/domainry-report/internal/application/report"
 )
 
 type reportHTTPSurface struct {
-	binding *Binding
-	handler http.Handler
+	binding    *Binding
+	handler    http.Handler
+	routes     []modulehttp.Route
+	operations map[string]map[string]any
 }
 
-func newReportHTTPSurface(binding *Binding) *reportHTTPSurface {
-	surface := &reportHTTPSurface{binding: binding}
+func newReportHTTPSurface(binding *Binding) (*reportHTTPSurface, error) {
+	routes, operations, err := reportHTTPContract()
+	if err != nil {
+		return nil, err
+	}
+	surface := &reportHTTPSurface{binding: binding, routes: routes, operations: operations}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /reports/{reportKey}/summary", surface.summary)
-	mux.HandleFunc("POST /reports/{reportKey}/query", surface.queryObjectSQL)
-	mux.HandleFunc("POST /reports/{reportKey}/snapshots/refresh", surface.refreshSnapshot)
-	mux.HandleFunc("POST /reports/{reportKey}/exports/{objectKey}/prepare", surface.prepareExport)
+	handlers := surface.handlers()
+	for _, route := range routes {
+		key := strings.TrimSpace(route.Action.Key)
+		handler, found := handlers[key]
+		if !found {
+			return nil, fmt.Errorf("Report Action %q has no HTTP handler", key)
+		}
+		mux.HandleFunc(route.Pattern(), handler)
+		delete(handlers, key)
+	}
+	if len(handlers) != 0 {
+		keys := make([]string, 0, len(handlers))
+		for key := range handlers {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		return nil, fmt.Errorf("Report handlers have no Action manifest entries: %v", keys)
+	}
 	surface.handler = mux
-	return surface
+	return surface, nil
 }
 
 func (*reportHTTPSurface) ContractVersion() string { return modulehttp.ContractVersion }
@@ -35,26 +57,45 @@ func (*reportHTTPSurface) Owner() string           { return "report" }
 func (*reportHTTPSurface) Name() string            { return "business" }
 func (s *reportHTTPSurface) Handler() http.Handler { return s.handler }
 
-func (*reportHTTPSurface) Routes() []modulehttp.Route {
-	principal := func(key, pattern, label string, effect actioncontract.EffectClass, risk actioncontract.RiskLevel, idempotency, audit string, approvals ...actioncontract.ApprovalPolicy) modulehttp.Route {
-		method, route, _ := strings.Cut(pattern, " ")
-		return modulehttp.Route{Action: actioncontract.ActionDefinition{
-			Key: key, Owner: "module:report", SourceKind: "module_surface", CapabilityKey: "report.business", CapabilityLabel: "Business reports",
-			OperationKey: key[strings.LastIndex(key, ".")+1:], OperationLabel: label, Label: label,
-			Exposures: []actioncontract.Exposure{actioncontract.ExposurePublic}, Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticatedPrincipal},
-			HTTP: &actioncontract.HTTPBinding{Method: method, RouteTemplate: route}, EffectClass: effect, RiskLevel: risk,
-			ApprovalPolicies: approvals, IdempotencyDecision: idempotency, AuditClass: audit, LifecycleStatus: actioncontract.LifecycleActive,
-		}}
-	}
-	return []modulehttp.Route{
-		principal("report.summary.get", "GET /reports/{reportKey}/summary", "Get report summary", actioncontract.EffectRead, actioncontract.RiskLow, "not_applicable", "owner_read_audit_policy"),
-		principal("report.query.execute", "POST /reports/{reportKey}/query", "Execute report query", actioncontract.EffectRead, actioncontract.RiskLow, "not_applicable", "owner_read_audit_policy"),
-		principal("report.snapshots.refresh", "POST /reports/{reportKey}/snapshots/refresh", "Refresh report snapshot", actioncontract.EffectWrite, actioncontract.RiskMedium, "caller_key_required", "mutation_audit_required"),
-		principal("report.exports.prepare", "POST /reports/{reportKey}/exports/{objectKey}/prepare", "Prepare report export", actioncontract.EffectWrite, actioncontract.RiskHigh, "caller_key_required", "business_export_prepare_audit", actioncontract.ApprovalConfirmation),
-	}
+func (s *reportHTTPSurface) Routes() []modulehttp.Route {
+	return append([]modulehttp.Route(nil), s.routes...)
 }
 
-func (*reportHTTPSurface) OpenAPIOperations() map[string]map[string]any {
+func (s *reportHTTPSurface) OpenAPIOperations() map[string]map[string]any {
+	return s.operations
+}
+
+func reportHTTPContract() ([]modulehttp.Route, map[string]map[string]any, error) {
+	definitions, err := reportapplication.AuthorizationActions()
+	if err != nil {
+		return nil, nil, err
+	}
+	byAction := reportOpenAPIOperationsByAction()
+	routes := make([]modulehttp.Route, 0, len(definitions))
+	operations := make(map[string]map[string]any, len(definitions))
+	for _, definition := range definitions {
+		if definition.HTTP == nil {
+			continue
+		}
+		route, err := modulehttp.RouteFromAction(definition)
+		if err != nil {
+			return nil, nil, fmt.Errorf("project Report Action %q: %w", definition.Key, err)
+		}
+		operation, found := byAction[definition.Key]
+		if !found {
+			return nil, nil, fmt.Errorf("Report Action %q has no OpenAPI operation", definition.Key)
+		}
+		routes = append(routes, route)
+		operations[route.Pattern()] = operation
+		delete(byAction, definition.Key)
+	}
+	if len(byAction) != 0 {
+		return nil, nil, fmt.Errorf("Report OpenAPI operations have no Action manifest entries")
+	}
+	return routes, operations, nil
+}
+
+func reportOpenAPIOperationsByAction() map[string]map[string]any {
 	security := []any{map[string]any{"BearerAuth": []any{}}}
 	reportKey := map[string]any{"name": "reportKey", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}
 	pathParameter := func(name string) map[string]any {
@@ -65,7 +106,7 @@ func (*reportHTTPSurface) OpenAPIOperations() map[string]map[string]any {
 	}
 	idempotencyKey := map[string]any{"name": "Idempotency-Key", "in": "header", "required": true, "schema": map[string]any{"type": "string", "minLength": 1}}
 	return map[string]map[string]any{
-		"GET /reports/{reportKey}/summary": {
+		sdk.ActionReportSummaryGet: {
 			"operationId": "getReportSummary", "tags": []string{"Reports"}, "summary": "Execute an authorized report summary",
 			"security": security, "parameters": []any{
 				reportKey,
@@ -76,20 +117,29 @@ func (*reportHTTPSurface) OpenAPIOperations() map[string]map[string]any {
 				queryParameter("cursor", map[string]any{"type": "string"}),
 			}, "responses": standardOpenAPIResponses("200", "Report summary", reportSummaryOpenAPISchema()),
 		},
-		"POST /reports/{reportKey}/query": {
+		sdk.ActionReportQueryExecute: {
 			"operationId": "queryReportObjectSQL", "tags": []string{"Reports"}, "summary": "Execute an authored Object SQL report with typed parameters",
 			"security": security, "parameters": []any{reportKey}, "requestBody": jsonRequestBody(map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"parameters": reportObjectSQLParametersOpenAPISchema(), "page_size": map[string]any{"type": "integer", "minimum": 1, "maximum": reportmodel.ReportPageMaximumSize}, "cursor": map[string]any{"type": "string"}}}), "responses": standardOpenAPIResponses("200", "Report summary", reportSummaryOpenAPISchema()),
 		},
-		"POST /reports/{reportKey}/snapshots/refresh": {
+		sdk.ActionReportSnapshotsRefresh: {
 			"operationId": "refreshReportSnapshot", "tags": []string{"Reports"}, "summary": "Refresh a materialized report snapshot",
 			"security": security, "parameters": []any{reportKey, idempotencyKey}, "responses": standardOpenAPIResponses("200", "Report snapshot", reportSnapshotOpenAPISchema()),
 		},
-		"POST /reports/{reportKey}/exports/{objectKey}/prepare": {
+		sdk.ActionReportExportsPrepare: {
 			"operationId": "prepareReportExport", "tags": []string{"Reports"}, "summary": "Prepare a governed report export",
 			"security": security, "parameters": []any{reportKey, pathParameter("objectKey"), idempotencyKey},
 			"requestBody": jsonRequestBody(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"audit_id", "scope"}, "properties": map[string]any{"audit_id": map[string]any{"type": "string"}, "scope": reportExportScopeOpenAPISchema()}}),
 			"responses":   standardOpenAPIResponses("202", "Accepted report export job", reportExportJobOpenAPISchema()),
 		},
+	}
+}
+
+func (s *reportHTTPSurface) handlers() map[string]http.HandlerFunc {
+	return map[string]http.HandlerFunc{
+		sdk.ActionReportSummaryGet:       s.summary,
+		sdk.ActionReportQueryExecute:     s.queryObjectSQL,
+		sdk.ActionReportSnapshotsRefresh: s.refreshSnapshot,
+		sdk.ActionReportExportsPrepare:   s.prepareExport,
 	}
 }
 
@@ -112,12 +162,8 @@ func jsonRequestBody(schema map[string]any) map[string]any {
 
 func (b *Binding) HTTPSurfaces() []modulehttp.Surface {
 	b.mu.RLock()
-	ready := b.queries != nil && b.snapshots != nil && b.exports != nil
-	b.mu.RUnlock()
-	if !ready {
-		return nil
-	}
-	return []modulehttp.Surface{newReportHTTPSurface(b)}
+	defer b.mu.RUnlock()
+	return append([]modulehttp.Surface(nil), b.surfaces...)
 }
 
 func (s *reportHTTPSurface) summary(w http.ResponseWriter, r *http.Request) {

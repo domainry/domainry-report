@@ -53,7 +53,10 @@ func (*reportHTTPExports) SourceVersion(context.Context, reportmodel.ReportExpor
 }
 
 func TestReportHTTPSurfaceOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
-	surface := newReportHTTPSurface(&Binding{})
+	surface, err := newReportHTTPSurface(&Binding{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	wantPatterns := []string{
 		"GET /reports/{reportKey}/summary",
 		"POST /reports/{reportKey}/query",
@@ -114,7 +117,11 @@ func TestReportHTTPSurfaceOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
 func TestReportHTTPSurfaceRejectsTrailingJSONAndForwardsCallerProof(t *testing.T) {
 	queries, exports := &reportHTTPQueries{}, &reportHTTPExports{}
 	binding := &Binding{queries: queries, snapshots: reportHTTPSnapshots{}, exports: exports}
-	handler := newReportHTTPSurface(binding).Handler()
+	surface, err := newReportHTTPSurface(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := surface.Handler()
 
 	for name, body := range map[string]string{
 		"trailing value": `{"parameters":{}} {}`,

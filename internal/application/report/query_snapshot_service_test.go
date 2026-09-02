@@ -318,6 +318,31 @@ func applicationTestSubject() reportmodel.ReportSubject {
 	return reportmodel.ReportSubject{Principal: identitysdk.Principal{Known: true, WorkspaceID: "workspace-1", UserID: "user-1", RoleKey: "manager"}, AccessScopeHash: "scope-1"}
 }
 
+func TestCrossWorkspaceReportUsesExplicitPermissionsInsteadOfRoleName(t *testing.T) {
+	const permission = "report.cross_workspace_summary.run"
+	report := reportmodel.ReportSchema{
+		Key:                 "cross-workspace-summary",
+		RequiredPermissions: []string{permission},
+		ExecutionScope:      &reportmodel.ReportExecutionScopeSchema{Mode: reportmodel.ReportExecutionScopeCrossWorkspaceAggregateV1},
+	}
+	subject := applicationTestSubject()
+	subject.Principal.RoleKey = "analyst"
+	subject.Principal.AccessBundle = &identitysdk.AccessBundle{FunctionGrants: []identitysdk.FunctionGrant{{
+		Resource: identitysdk.ResourceType("report.cross_workspace_summary"),
+		Action:   identitysdk.Action("run"),
+		Effect:   identitysdk.EffectAllow,
+	}}}
+	if !reportVisibleToSubject(report, subject) {
+		t.Fatal("an exact report permission must authorize independently of the role name")
+	}
+
+	subject.Principal.RoleKey = "superadmin"
+	subject.Principal.AccessBundle = nil
+	if reportVisibleToSubject(report, subject) {
+		t.Fatal("a role name must not bypass an absent exact report permission")
+	}
+}
+
 func applicationTestReport(materialized bool) reportmodel.ReportSchema {
 	report := reportmodel.ReportSchema{Key: "sales", Name: "Sales", Dataset: reportmodel.ReportDatasetSchema{
 		Source:     reportmodel.ReportDatasetSource{ObjectKey: "event", Alias: "events"},

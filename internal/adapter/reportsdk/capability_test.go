@@ -24,8 +24,12 @@ func TestReportCapabilityTracksOwnerRoutesAndValidation(t *testing.T) {
 	if len(summary.Identity.SupportedDeploymentModes) != 1 || summary.Identity.SupportedDeploymentModes[0] != modulecapability.DeploymentModeModule {
 		t.Fatalf("Report topology=%v", summary.Identity.SupportedDeploymentModes)
 	}
-	if len(summary.Categories) != 1 || summary.Categories[0].OperationCount != len(newReportHTTPSurface(&Binding{}).Routes()) {
-		t.Fatalf("Report categories=%+v routes=%d", summary.Categories, len(newReportHTTPSurface(&Binding{}).Routes()))
+	routes, _, err := reportHTTPContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Categories) != 1 || summary.Categories[0].OperationCount != len(routes) {
+		t.Fatalf("Report categories=%+v routes=%d", summary.Categories, len(routes))
 	}
 	request := modulecapability.ValidationRequest{
 		ContractVersion: modulecapability.ValidationContractVersion, ModuleKey: "report", CategoryKey: reportBusinessCategory,
