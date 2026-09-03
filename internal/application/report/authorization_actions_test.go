@@ -21,11 +21,11 @@ func TestAuthorizationActionsFreezeAsOneManifest(t *testing.T) {
 	if err := registry.Freeze(); err != nil {
 		t.Fatal(err)
 	}
-	if permissions := registry.PermissionDefinitions(); len(permissions) != 0 {
-		t.Fatalf("authenticated Report Actions invented role Permissions: %#v", permissions)
+	if permissions := registry.PermissionDefinitions(); len(permissions) != 4 {
+		t.Fatalf("Report exact Permissions=%#v", permissions)
 	}
 	for _, definition := range registry.Definitions() {
-		if definition.Owner != AuthorizationOwner || definition.HTTP == nil || definition.Authorization.Strategy != actioncontract.AuthorizationAuthenticatedPrincipal || definition.Permission != nil {
+		if definition.Owner != AuthorizationOwner || definition.HTTP == nil || definition.Authorization.Strategy != actioncontract.AuthorizationAuthenticated || definition.Permission == nil || definition.Permission.Key != definition.Key {
 			t.Fatalf("invalid Report Action: %#v", definition)
 		}
 	}

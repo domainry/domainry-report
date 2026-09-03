@@ -14,12 +14,12 @@ import (
 // rules. Implementations answer current Runtime record/field policy without
 // moving Report scope validation back into the host.
 type Authorization interface {
-	AuthorizeReportExportSource(context.Context, string) (string, error)
+	AuthorizeReportExportSource(context.Context, string) error
 	AuthorizeReportExportField(context.Context, string, string) (bool, error)
 	AuthorizeReportObjectSQLExport(context.Context, reportmodel.ReportSchema) error
 }
 
-func NormalizeScope(ctx context.Context, report reportmodel.ReportSchema, objectKey string, control reportmodel.ReportExportControlSchema, request reportmodel.ReportExportScopeRequest, roleKey string, authorization Authorization) (reportmodel.ReportExportScopeRequest, reportmodel.ReportSchema, map[string]bool, error) {
+func NormalizeScope(ctx context.Context, report reportmodel.ReportSchema, objectKey string, control reportmodel.ReportExportControlSchema, request reportmodel.ReportExportScopeRequest, authorization Authorization) (reportmodel.ReportExportScopeRequest, reportmodel.ReportSchema, map[string]bool, error) {
 	scope := request
 	originalTimeZone := defaultReportTimeZone(report)
 	scope.QueryKey = strings.TrimSpace(scope.QueryKey)
@@ -30,7 +30,7 @@ func NormalizeScope(ctx context.Context, report reportmodel.ReportSchema, object
 		return scope, report, nil, exportScopeError("backend.report.export_scope_invalid")
 	}
 	if report.ObjectSQLV1 != nil {
-		return normalizeObjectSQLExportScope(ctx, report, objectKey, control, request, scope, roleKey, authorization)
+		return normalizeObjectSQLExportScope(ctx, report, objectKey, control, scope, authorization)
 	}
 	if report.ExportScope == nil {
 		var predicateErr error
@@ -39,10 +39,6 @@ func NormalizeScope(ctx context.Context, report reportmodel.ReportSchema, object
 			return scope, report, nil, predicateErr
 		}
 	}
-	if scope.RoleKey != "" && strings.TrimSpace(scope.RoleKey) != strings.TrimSpace(roleKey) {
-		return scope, report, nil, exportScopeError("backend.report.export_scope_role_mismatch")
-	}
-	scope.RoleKey = strings.TrimSpace(roleKey)
 	if report.ExportScope != nil {
 		var scopeErr error
 		scope, report, scopeErr = applyReportOwnedExportScope(scope, report)
@@ -59,21 +55,20 @@ func NormalizeScope(ctx context.Context, report reportmodel.ReportSchema, object
 		}
 	}
 
-	dataScopes := map[string]string{}
 	for _, sourceObject := range reportmodel.ReportDatasetObjectKeys(report.Dataset) {
-		if authorization == nil {
-			return scope, report, nil, &apperror.AppError{Kind: apperror.KindInternal, Code: "backend.report.export_authorizer_unavailable"}
+		if !reportExportControlOwnsSource(control, strings.TrimSpace(sourceObject)) {
+			return scope, report, nil, exportScopeError("backend.report.export_control_invalid")
 		}
-		dataScope, err := authorization.AuthorizeReportExportSource(ctx, sourceObject)
-		if err != nil {
-			return scope, report, nil, err
-		}
-		dataScopes[sourceObject] = dataScope
 	}
-	if len(request.DataScopes) > 0 && !canonicalJSONEqual(request.DataScopes, dataScopes) {
-		return scope, report, nil, exportScopeError("backend.report.export_scope_data_mismatch")
+	if authorization == nil {
+		return scope, report, nil, &apperror.AppError{Kind: apperror.KindInternal, Code: "backend.report.export_authorizer_unavailable"}
 	}
-	scope.DataScopes = dataScopes
+	// The path-selected object is the exact export Permission boundary. Joined
+	// sources are validated as control-owned, but never switch authorization to
+	// another source object's export Permission.
+	if err := authorization.AuthorizeReportExportSource(ctx, strings.TrimSpace(objectKey)); err != nil {
+		return scope, report, nil, err
+	}
 
 	dimensions := map[string]reportmodel.ReportDatasetDimension{}
 	for _, dimension := range report.Dataset.Dimensions {
@@ -230,37 +225,25 @@ func NormalizeScope(ctx context.Context, report reportmodel.ReportSchema, object
 			}
 		}
 	}
-	_ = objectKey
 	return scope, report, maskedDimensions, nil
 }
 
-func normalizeObjectSQLExportScope(ctx context.Context, report reportmodel.ReportSchema, objectKey string, control reportmodel.ReportExportControlSchema, request, scope reportmodel.ReportExportScopeRequest, roleKey string, authorization Authorization) (reportmodel.ReportExportScopeRequest, reportmodel.ReportSchema, map[string]bool, error) {
+func normalizeObjectSQLExportScope(ctx context.Context, report reportmodel.ReportSchema, objectKey string, control reportmodel.ReportExportControlSchema, scope reportmodel.ReportExportScopeRequest, authorization Authorization) (reportmodel.ReportExportScopeRequest, reportmodel.ReportSchema, map[string]bool, error) {
 	if report.ExportScope != nil || scope.QueryKey != "" || scope.AnalysisKey != "" || len(scope.Filters) > 0 || scope.DateRange != nil || strings.TrimSpace(scope.TimeZone) != "" || len(scope.Tags) > 0 || scope.TagMatch != "" || len(scope.MetricDefinitions) > 0 {
 		return scope, report, nil, exportScopeError("backend.report.object_sql_export_scope_invalid")
 	}
-	if scope.RoleKey != "" && strings.TrimSpace(scope.RoleKey) != strings.TrimSpace(roleKey) {
-		return scope, report, nil, exportScopeError("backend.report.export_scope_role_mismatch")
-	}
-	scope.RoleKey = strings.TrimSpace(roleKey)
-	dataScopes := map[string]string{}
 	for _, sourceObject := range reportmodel.ReportObjectSQLObjectKeys(report.ObjectSQLV1) {
 		sourceObject = strings.TrimSpace(sourceObject)
 		if !reportExportControlOwnsSource(control, sourceObject) {
 			return scope, report, nil, exportScopeError("backend.report.export_control_invalid")
 		}
-		if authorization == nil {
-			return scope, report, nil, &apperror.AppError{Kind: apperror.KindInternal, Code: "backend.report.export_authorizer_unavailable"}
-		}
-		dataScope, err := authorization.AuthorizeReportExportSource(ctx, sourceObject)
-		if err != nil {
-			return scope, report, nil, err
-		}
-		dataScopes[sourceObject] = dataScope
 	}
-	if len(request.DataScopes) > 0 && !canonicalJSONEqual(request.DataScopes, dataScopes) {
-		return scope, report, nil, exportScopeError("backend.report.export_scope_data_mismatch")
+	if authorization == nil {
+		return scope, report, nil, &apperror.AppError{Kind: apperror.KindInternal, Code: "backend.report.export_authorizer_unavailable"}
 	}
-	scope.DataScopes = dataScopes
+	if err := authorization.AuthorizeReportExportSource(ctx, strings.TrimSpace(objectKey)); err != nil {
+		return scope, report, nil, err
+	}
 
 	parameters, err := reportobjectsql.NormalizeParameters(report.ObjectSQLV1.Parameters, scope.Parameters)
 	if err != nil {

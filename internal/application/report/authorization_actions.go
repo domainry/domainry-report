@@ -11,9 +11,9 @@ import (
 const AuthorizationOwner = "module:report"
 
 // AuthorizationActions is Report's complete HTTP Action manifest. Report
-// execution is authenticated-principal based because each published report
-// applies its own audience and data/field/export policies after subject
-// resolution; these Actions therefore do not invent role Permissions.
+// execution is authenticated-principal based and every public entry owns one
+// same-key Permission. Report definitions may add narrower source permissions,
+// but they never replace the executable entry Permission.
 func AuthorizationActions() ([]actioncontract.ActionDefinition, error) {
 	definitions := []actioncontract.ActionDefinition{
 		reportAction(reportsdk.ActionReportSummaryGet, "GET /reports/{reportKey}/summary", "Get report summary", actioncontract.EffectRead, actioncontract.RiskLow, "not_applicable", "owner_read_audit_policy"),
@@ -35,14 +35,19 @@ func AuthorizationActions() ([]actioncontract.ActionDefinition, error) {
 func reportAction(key, pattern, label string, effect actioncontract.EffectClass, risk actioncontract.RiskLevel, idempotency, audit string, approvals ...actioncontract.ApprovalPolicy) actioncontract.ActionDefinition {
 	method, path, _ := strings.Cut(strings.TrimSpace(pattern), " ")
 	separator := strings.LastIndex(key, ".")
+	resourceKey, operationKey := key[:separator], key[separator+1:]
 	return actioncontract.ActionDefinition{
 		Key: key, Owner: AuthorizationOwner, SourceKind: "module_surface",
 		CapabilityKey: reportsdk.CapabilityReportBusiness, CapabilityLabel: "Business reports",
-		OperationKey: key[separator+1:], OperationLabel: label, Label: label,
+		OperationKey: operationKey, OperationLabel: label, Label: label,
 		Exposures:     []actioncontract.Exposure{actioncontract.ExposurePublic},
-		Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticatedPrincipal},
+		Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticated},
 		HTTP:          &actioncontract.HTTPBinding{Method: method, RouteTemplate: path},
-		EffectClass:   effect, RiskLevel: risk, ApprovalPolicies: append([]actioncontract.ApprovalPolicy(nil), approvals...),
+		Permission: &actioncontract.PermissionDefinition{
+			Key: key, Owner: AuthorizationOwner, ResourceKey: resourceKey, OperationKey: operationKey,
+			Label: label, Category: "Business reports", LifecycleStatus: actioncontract.LifecycleActive,
+		},
+		EffectClass: effect, RiskLevel: risk, ApprovalPolicies: append([]actioncontract.ApprovalPolicy(nil), approvals...),
 		IdempotencyDecision: idempotency, AuditClass: audit, LifecycleStatus: actioncontract.LifecycleActive,
 	}
 }

@@ -47,8 +47,7 @@ func reportExportScopeOpenAPISchema() map[string]any {
 		"filters": map[string]any{"type": "array", "items": filter}, "date_range": dateRange, "timezone": map[string]any{"type": "string"},
 		"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "tag_match": map[string]any{"type": "string"},
 		"field_projection": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "purpose": map[string]any{"type": "string"},
-		"metric_definitions": map[string]any{"type": "array", "items": metric}, "freshness": freshness, "role_key": map[string]any{"type": "string"},
-		"data_scopes": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+		"metric_definitions": map[string]any{"type": "array", "items": metric}, "freshness": freshness,
 	}}
 }
 

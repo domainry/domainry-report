@@ -71,7 +71,7 @@ func TestReportHTTPSurfaceOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
 		if route.Pattern() != wantPatterns[index] {
 			t.Fatalf("route[%d]=%q want=%q", index, route.Pattern(), wantPatterns[index])
 		}
-		if route.Action.Authorization.Strategy != "authenticated_principal" || route.Action.Permission != nil || !reflect.DeepEqual(route.Action.Exposures, []modulehttp.Exposure{modulehttp.ExposurePublic}) {
+		if route.Action.Authorization.Strategy != actioncontract.AuthorizationAuthenticated || route.Action.Permission == nil || route.Action.Permission.Key != route.Action.Key || !reflect.DeepEqual(route.Action.Exposures, []modulehttp.Exposure{modulehttp.ExposurePublic}) {
 			t.Fatalf("route[%d] authorization/governance=%#v", index, route)
 		}
 	}

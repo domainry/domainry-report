@@ -9,13 +9,16 @@ import (
 )
 
 type exportAuthorizationStub struct {
-	scope  string
-	masked map[string]bool
-	denied map[string]error
+	masked          map[string]bool
+	denied          map[string]error
+	authorizeSource func(string)
 }
 
-func (s exportAuthorizationStub) AuthorizeReportExportSource(context.Context, string) (string, error) {
-	return s.scope, nil
+func (s exportAuthorizationStub) AuthorizeReportExportSource(_ context.Context, objectKey string) error {
+	if s.authorizeSource != nil {
+		s.authorizeSource(objectKey)
+	}
+	return nil
 }
 
 func (s exportAuthorizationStub) AuthorizeReportExportField(_ context.Context, _, fieldKey string) (bool, error) {
@@ -39,12 +42,12 @@ func TestNormalizeScopeOwnsProjectionMaskingAndCanonicalDateRange(t *testing.T) 
 		FieldProjection: []string{" status ", "orders", "status"},
 		Freshness:       reportmodel.ReportExportFreshness{Mode: "realtime"},
 	}
-	authorization := exportAuthorizationStub{scope: "identity_policy", masked: map[string]bool{"status": true}}
-	scope, scoped, masked, err := NormalizeScope(t.Context(), report, "order", reportmodel.ReportExportControlSchema{MaskingRequired: true}, request, "analyst", authorization)
+	authorization := exportAuthorizationStub{masked: map[string]bool{"status": true}}
+	scope, scoped, masked, err := NormalizeScope(t.Context(), report, "order", reportmodel.ReportExportControlSchema{SourceObjects: []string{"order"}, MaskingRequired: true}, request, authorization)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scope.Purpose != "audit evidence" || scope.RoleKey != "analyst" || scope.DataScopes["order"] != "identity_policy" {
+	if scope.Purpose != "audit evidence" {
 		t.Fatalf("scope=%#v", scope)
 	}
 	if len(scope.FieldProjection) != 2 || scope.FieldProjection[0] != "status" || scope.FieldProjection[1] != "orders" || !masked["status"] {
@@ -73,6 +76,51 @@ func TestDeclaredPredicatesAreClosedAndControlledByReport(t *testing.T) {
 	}
 	if _, _, _, err = ApplyDeclaredPredicates(report, "current", nil, nil, nil, true); apperror.CodeOf(err) != "backend.report.query_not_allowed" {
 		t.Fatalf("closed allowlist err=%v", err)
+	}
+}
+
+func TestExportScopeKeepsPathPermissionAcrossJoinedSources(t *testing.T) {
+	report := exportPolicyReport()
+	report.Dataset.Joins = []reportmodel.ReportDatasetJoin{{
+		Alias: "customer", ObjectKey: "customer", Type: "left", LeftAlias: "order",
+		LeftField: "customer_id", RightField: "id", Cardinality: "many_to_one",
+	}}
+	calls := []string{}
+	authorization := exportAuthorizationStub{authorizeSource: func(objectKey string) { calls = append(calls, objectKey) }}
+	_, _, _, err := NormalizeScope(t.Context(), report, "order", reportmodel.ReportExportControlSchema{
+		SourceObjects: []string{"order", "customer"},
+	}, reportmodel.ReportExportScopeRequest{Purpose: "audit", Freshness: reportmodel.ReportExportFreshness{Mode: "realtime"}}, authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0] != "order" {
+		t.Fatalf("joined source changed the exact export Permission: %v", calls)
+	}
+
+	_, _, _, err = NormalizeScope(t.Context(), report, "order", reportmodel.ReportExportControlSchema{
+		SourceObjects: []string{"order"},
+	}, reportmodel.ReportExportScopeRequest{Purpose: "audit", Freshness: reportmodel.ReportExportFreshness{Mode: "realtime"}}, authorization)
+	if apperror.CodeOf(err) != "backend.report.export_control_invalid" {
+		t.Fatalf("unowned joined source err=%v", err)
+	}
+}
+
+func TestObjectSQLExportScopeKeepsPathPermissionAcrossSources(t *testing.T) {
+	report := reportmodel.ReportSchema{Key: "orders", ObjectSQLV1: &reportmodel.ReportObjectSQLSchema{
+		SQL:           "SELECT o.id AS id FROM `order` AS o JOIN customer AS c ON c.id = o.customer_id",
+		SourceObjects: []string{"order", "customer"},
+		ResultSchema:  []reportmodel.ReportResultColumnSchema{{Key: "id", Type: "text", Kind: "dimension"}},
+	}}
+	calls := []string{}
+	authorization := exportAuthorizationStub{authorizeSource: func(objectKey string) { calls = append(calls, objectKey) }}
+	_, _, _, err := NormalizeScope(t.Context(), report, "order", reportmodel.ReportExportControlSchema{
+		SourceObjects: []string{"order", "customer"},
+	}, reportmodel.ReportExportScopeRequest{Purpose: "audit", Freshness: reportmodel.ReportExportFreshness{Mode: "realtime"}}, authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0] != "order" {
+		t.Fatalf("Object SQL source changed the exact export Permission: %v", calls)
 	}
 }
 

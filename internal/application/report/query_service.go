@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,7 +57,7 @@ func NewQueryService(host modulehost.ApplicationHost, definitions DefinitionProv
 }
 
 func (s *QueryService) Summary(ctx context.Context, request reportmodel.ReportSummaryRequest, authority reportmodel.ReportAuthority) (reportmodel.ReportSummary, error) {
-	subject, report, err := s.resolve(ctx, request.ReportKey, authority)
+	subject, report, err := s.resolve(ctx, request.ReportKey, authority, reportsdk.ActionReportSummaryGet)
 	if err != nil {
 		return reportmodel.ReportSummary{}, err
 	}
@@ -77,18 +78,18 @@ func (s *QueryService) Summary(ctx context.Context, request reportmodel.ReportSu
 	if mode != "realtime" {
 		return reportmodel.ReportSummary{}, reportError(400, "backend.report.execution_mode_invalid", nil)
 	}
-	scoped := report
+	scoped := reportForDataPermissions(report, reportDataPermissionKeys(report))
 	if strings.TrimSpace(request.QueryKey) != "" || len(request.Tags) != 0 {
 		if report.ObjectSQLV1 != nil {
 			return reportmodel.ReportSummary{}, reportError(400, "backend.report.object_sql_scope_unsupported", nil)
 		}
-		scoped, err = reportengine.ApplyDeclaredPredicates(report, request.QueryKey, request.Tags)
+		scoped, err = reportengine.ApplyDeclaredPredicates(scoped, request.QueryKey, request.Tags)
 		if err != nil {
 			return reportmodel.ReportSummary{}, predicateApplicationError(err)
 		}
 	}
-	fingerprint := reportFingerprint(report, map[string]any{"mode": mode, "query_key": strings.TrimSpace(request.QueryKey), "tags": request.Tags}, subject)
-	summary, err := s.executeStablePage(ctx, report, request.Page, fingerprint, subject, func() (reportmodel.ReportSummary, error) {
+	fingerprint := reportFingerprint(scoped, map[string]any{"mode": mode, "query_key": strings.TrimSpace(request.QueryKey), "tags": request.Tags}, subject)
+	summary, err := s.executeStablePage(ctx, scoped, request.Page, fingerprint, subject, func() (reportmodel.ReportSummary, error) {
 		return s.execute(ctx, scoped, nil, subject)
 	})
 	if err != nil {
@@ -101,13 +102,14 @@ func (s *QueryService) Summary(ctx context.Context, request reportmodel.ReportSu
 }
 
 func (s *QueryService) QueryObjectSQL(ctx context.Context, request reportmodel.ReportObjectSQLRequest, authority reportmodel.ReportAuthority) (reportmodel.ReportSummary, error) {
-	subject, report, err := s.resolve(ctx, request.ReportKey, authority)
+	subject, report, err := s.resolve(ctx, request.ReportKey, authority, reportsdk.ActionReportQueryExecute)
 	if err != nil {
 		return reportmodel.ReportSummary{}, err
 	}
 	if report.ObjectSQLV1 == nil {
 		return reportmodel.ReportSummary{}, reportError(400, "backend.report.object_sql_not_enabled", nil)
 	}
+	report = reportForDataPermissions(report, reportDataPermissionKeys(report))
 	normalized, err := reportobjectsql.NormalizeParameters(report.ObjectSQLV1.Parameters, request.Parameters)
 	if err != nil {
 		return reportmodel.ReportSummary{}, objectSQLApplicationError(err)
@@ -123,13 +125,16 @@ func (s *QueryService) QueryObjectSQL(ctx context.Context, request reportmodel.R
 	return summary, nil
 }
 
-func (s *QueryService) resolve(ctx context.Context, reportKey string, authority reportmodel.ReportAuthority) (reportmodel.ReportSubject, reportmodel.ReportSchema, error) {
+func (s *QueryService) resolve(ctx context.Context, reportKey string, authority reportmodel.ReportAuthority, actionKey string) (reportmodel.ReportSubject, reportmodel.ReportSchema, error) {
 	if s == nil || s.subjects == nil || s.definitions == nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(500, "backend.report.execution_unavailable", nil)
 	}
 	subject, err := s.resolveSubject(ctx, authority)
 	if err != nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, err
+	}
+	if !subject.HasPermission(strings.TrimSpace(actionKey)) {
+		return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(403, "backend.permission.denied", nil)
 	}
 	reports, err := s.definitions.ReportDefinitions(ctx)
 	if err != nil {
@@ -140,12 +145,48 @@ func (s *QueryService) resolve(ctx context.Context, reportKey string, authority 
 		if strings.TrimSpace(report.Key) != reportKey {
 			continue
 		}
-		if !reportVisibleToSubject(report, subject) {
+		if !reportVisibleToSubject(report, subject) || !subject.HasAllPermissions(reportDataPermissionKeys(report)) {
 			break
 		}
 		return subject, report, nil
 	}
 	return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(404, "backend.report.not_found", nil)
+}
+
+// reportDataPermissionKeys resolves the exact Permission set whose data
+// policies govern every source participating in one report execution. An
+// authored allowlist wins; otherwise the root source's read Permission is the
+// only implicit default. Joined sources never invent their own Permission.
+func reportDataPermissionKeys(report reportmodel.ReportSchema) []string {
+	seen := map[string]bool{}
+	permissions := make([]string, 0, len(report.RequiredPermissions))
+	for _, raw := range report.RequiredPermissions {
+		permission := strings.TrimSpace(raw)
+		if permission == "" || seen[permission] {
+			continue
+		}
+		seen[permission] = true
+		permissions = append(permissions, permission)
+	}
+	if len(permissions) == 0 {
+		objectKey := strings.TrimSpace(report.Dataset.Source.ObjectKey)
+		if report.ObjectSQLV1 != nil && len(report.ObjectSQLV1.SourceObjects) > 0 {
+			objectKey = strings.TrimSpace(report.ObjectSQLV1.SourceObjects[0])
+		}
+		if objectKey != "" {
+			permissions = append(permissions, objectKey+".read")
+		}
+	}
+	sort.Strings(permissions)
+	return permissions
+}
+
+// reportForDataPermissions turns a published definition into the transient
+// host execution contract. RequiredPermissions on this copy is deliberately
+// the canonical exact set to compile for every alias/source in the query.
+func reportForDataPermissions(report reportmodel.ReportSchema, permissions []string) reportmodel.ReportSchema {
+	report.RequiredPermissions = append([]string(nil), permissions...)
+	return report
 }
 
 func reportVisibleToSubject(report reportmodel.ReportSchema, subject reportmodel.ReportSubject) bool {
@@ -373,7 +414,7 @@ func (s *QueryService) readSnapshot(ctx context.Context, report reportmodel.Repo
 	if s.snapshots == nil {
 		return reportmodel.ReportSummary{}, reportError(500, "backend.report.snapshot_unavailable", nil)
 	}
-	snapshot, found, err := s.snapshots.Latest(ctx, subject.Principal.WorkspaceID, report.Key, subject.AccessScopeHash)
+	snapshot, found, err := s.snapshots.Latest(ctx, subject.Principal.WorkspaceID, report.Key, reportSnapshotAccessScopeHash(subject, reportDataPermissionKeys(report)))
 	if err != nil {
 		return reportmodel.ReportSummary{}, reportError(500, "backend.report.snapshot_read_failed", err)
 	}
@@ -626,7 +667,26 @@ func (s *QueryService) pageCursorChecksum(cursor stablePageCursor) string {
 }
 
 func reportFingerprint(report reportmodel.ReportSchema, selectors any, subject reportmodel.ReportSubject) string {
-	return canonicalHash(map[string]any{"report": report, "selectors": selectors, "access_scope_sha256": subject.AccessScopeHash})
+	return canonicalHash(map[string]any{"report": report, "selectors": selectors, "access_scope_sha256": subject.AccessScopeHash, "data_permissions": reportDataPermissionKeys(report)})
+}
+
+func reportSnapshotAccessScopeHash(subject reportmodel.ReportSubject, permissions []string) string {
+	orgScopeIDs := append([]string(nil), subject.Principal.OrgScopeIDs...)
+	supportOrgScopeIDs := append([]string(nil), subject.Principal.SupportOrgScopeIDs...)
+	permissions = append([]string(nil), permissions...)
+	sort.Strings(orgScopeIDs)
+	sort.Strings(supportOrgScopeIDs)
+	sort.Strings(permissions)
+	return canonicalHash(map[string]any{
+		"host_access_scope_sha256": subject.AccessScopeHash,
+		"workspace_id":             strings.TrimSpace(subject.Principal.WorkspaceID),
+		"requester_user_id":        strings.TrimSpace(subject.Principal.UserID),
+		"org_id":                   strings.TrimSpace(subject.Principal.OrgID),
+		"org_scope_ids":            orgScopeIDs,
+		"support_org_id":           strings.TrimSpace(subject.Principal.SupportOrgID),
+		"support_org_scope_ids":    supportOrgScopeIDs,
+		"data_permissions":         permissions,
+	})
 }
 
 func canonicalHash(value any) string {

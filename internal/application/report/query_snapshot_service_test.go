@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,10 +41,13 @@ type applicationTestExportGateway struct {
 	request reportmodel.ReportExportPrepareRequest
 }
 
-type applicationTestExportAuthorization struct{}
+type applicationTestExportAuthorization struct{ authorizedSources *[]string }
 
-func (applicationTestExportAuthorization) AuthorizeReportExportSource(context.Context, string, reportmodel.ReportSubject) (string, error) {
-	return "all_records", nil
+func (a applicationTestExportAuthorization) AuthorizeReportExportSource(_ context.Context, objectKey string, _ reportmodel.ReportSubject) error {
+	if a.authorizedSources != nil {
+		*a.authorizedSources = append(*a.authorizedSources, objectKey)
+	}
+	return nil
 }
 
 func (applicationTestExportAuthorization) AuthorizeReportExportField(context.Context, string, string, reportmodel.ReportSubject) (bool, error) {
@@ -83,7 +87,8 @@ func TestExportServiceOwnsWorkerResolutionPagingAndSourceVersion(t *testing.T) {
 		subjects: applicationTestSubjects{subject: applicationTestSubject()}, definitions: applicationTestDefinitions{reports: []reportmodel.ReportSchema{report}},
 		datasets: applicationTestDataset(), sourceVersions: &applicationTestVersions{version: "version-1"}, cursorKey: []byte("report-export-cursor-key"), clock: time.Now,
 	}
-	service := NewExportService(queries, applicationTestExportDefinitions{control: control, found: true}, applicationTestExportAuthorization{}, &applicationTestExportGateway{})
+	authorizedSources := []string{}
+	service := NewExportService(queries, applicationTestExportDefinitions{control: control, found: true}, applicationTestExportAuthorization{authorizedSources: &authorizedSources}, &applicationTestExportGateway{})
 	authority := reportmodel.ReportAuthority{AccessToken: "token"}
 	request := reportmodel.ReportExportExecutionRequest{
 		ReportKey: report.Key, ObjectKey: "event",
@@ -91,7 +96,7 @@ func TestExportServiceOwnsWorkerResolutionPagingAndSourceVersion(t *testing.T) {
 		Page:  reportmodel.ReportPageRequest{PageSize: 2},
 	}
 	resolved, err := service.ResolveExecution(t.Context(), request, authority)
-	if err != nil || resolved.Definition.Report.Key != report.Key || resolved.Definition.Control.Key != control.Key || resolved.Scope.RoleKey != "manager" || resolved.Scope.DataScopes["event"] != "all_records" {
+	if err != nil || resolved.Definition.Report.Key != report.Key || resolved.Definition.Control.Key != control.Key {
 		t.Fatalf("resolved=%#v err=%v", resolved, err)
 	}
 	first, err := service.ReadPage(t.Context(), request, authority)
@@ -106,6 +111,17 @@ func TestExportServiceOwnsWorkerResolutionPagingAndSourceVersion(t *testing.T) {
 	version, err := service.SourceVersion(t.Context(), request, authority)
 	if err != nil || version.Watermark != "version-1" {
 		t.Fatalf("source version=%#v err=%v", version, err)
+	}
+	if len(queries.datasets.(*applicationTestDatasets).requests) == 0 || !equalStrings(queries.datasets.(*applicationTestDatasets).requests[0].Report.RequiredPermissions, []string{"event.export"}) {
+		t.Fatalf("export dataset did not preserve its exact Permission: %#v", queries.datasets.(*applicationTestDatasets).requests)
+	}
+	if len(authorizedSources) != 4 {
+		t.Fatalf("export source authorization calls=%v", authorizedSources)
+	}
+	for _, source := range authorizedSources {
+		if source != "event" {
+			t.Fatalf("export switched source Permission: %v", authorizedSources)
+		}
 	}
 }
 
@@ -125,30 +141,40 @@ func TestQueryServiceJoinsAuthorizedRecordCollectionsInsideReport(t *testing.T) 
 }
 
 type applicationTestDatasets struct {
-	result reportmodel.ReportDatasetReadResult
-	reads  int
+	result   reportmodel.ReportDatasetReadResult
+	reads    int
+	requests []reportmodel.ReportDatasetReadRequest
 }
 
-func (d *applicationTestDatasets) ReadReportDataset(context.Context, reportmodel.ReportDatasetReadRequest) (reportmodel.ReportDatasetReadResult, error) {
+func (d *applicationTestDatasets) ReadReportDataset(_ context.Context, request reportmodel.ReportDatasetReadRequest) (reportmodel.ReportDatasetReadResult, error) {
 	d.reads++
+	d.requests = append(d.requests, request)
 	return d.result, nil
 }
 
-type applicationTestVersions struct{ version string }
+type applicationTestVersions struct {
+	version string
+	reports []reportmodel.ReportSchema
+}
 
-func (v *applicationTestVersions) ReadReportSourceVersion(context.Context, reportmodel.ReportSchema, reportmodel.ReportSubject) (reportmodel.ReportSnapshotSourceVersion, error) {
+func (v *applicationTestVersions) ReadReportSourceVersion(_ context.Context, report reportmodel.ReportSchema, _ reportmodel.ReportSubject) (reportmodel.ReportSnapshotSourceVersion, error) {
+	v.reports = append(v.reports, report)
 	return reportmodel.ReportSnapshotSourceVersion{Watermark: v.version, SourceVersions: map[string]string{"events": v.version}}, nil
 }
 
 type applicationTestObjectSQL struct {
-	requests []reportmodel.ReportObjectSQLExecutionRequest
+	requests          []reportmodel.ReportObjectSQLExecutionRequest
+	resolvedReports   []reportmodel.ReportSchema
+	authorizedReports []reportmodel.ReportSchema
 }
 
-func (*applicationTestObjectSQL) ResolveReportObjectSQLSources(context.Context, reportmodel.ReportSchema, reportmodel.ReportSubject) (map[string]reportmodel.ReportSourceObject, error) {
+func (e *applicationTestObjectSQL) ResolveReportObjectSQLSources(_ context.Context, report reportmodel.ReportSchema, _ reportmodel.ReportSubject) (map[string]reportmodel.ReportSourceObject, error) {
+	e.resolvedReports = append(e.resolvedReports, report)
 	return map[string]reportmodel.ReportSourceObject{"order": {Key: "order", Fields: []reportmodel.ReportSourceField{{Key: "id", Type: "text"}, {Key: "status", Type: "text"}}}}, nil
 }
 
-func (*applicationTestObjectSQL) AuthorizeReportObjectSQLPlan(context.Context, reportmodel.ReportSchema, reportmodel.ReportObjectSQLPlan, reportmodel.ReportSubject) error {
+func (e *applicationTestObjectSQL) AuthorizeReportObjectSQLPlan(_ context.Context, report reportmodel.ReportSchema, _ reportmodel.ReportObjectSQLPlan, _ reportmodel.ReportSubject) error {
+	e.authorizedReports = append(e.authorizedReports, report)
 	return nil
 }
 
@@ -189,6 +215,9 @@ func TestQueryServiceOwnsBoundedObjectSQLPagination(t *testing.T) {
 	if len(executor.requests) != 2 || executor.requests[0].PageSize != 2 || executor.requests[1].PageCursor != "database-cursor-2" || executor.requests[1].PagePosition != 2 {
 		t.Fatalf("execution requests=%#v", executor.requests)
 	}
+	if len(executor.resolvedReports) != 2 || len(executor.authorizedReports) != 2 || !equalStrings(executor.requests[0].Report.RequiredPermissions, []string{"order.read"}) || !equalStrings(executor.resolvedReports[0].RequiredPermissions, []string{"order.read"}) || !equalStrings(executor.authorizedReports[0].RequiredPermissions, []string{"order.read"}) {
+		t.Fatalf("Object SQL exact Permission was not preserved through compile/authorize/execute: resolved=%#v authorized=%#v executed=%#v", executor.resolvedReports, executor.authorizedReports, executor.requests)
+	}
 	versions.version = "version-2"
 	_, err = service.QueryObjectSQL(t.Context(), reportmodel.ReportObjectSQLRequest{ReportKey: report.Key, Parameters: map[string]any{}, Page: reportmodel.ReportPageRequest{PageSize: 2, Cursor: first.NextCursor}}, authority)
 	assertReportSDKErrorCode(t, err, "backend.report.cursor_stale")
@@ -219,6 +248,9 @@ func TestQueryServiceOwnsStablePaginationAndSourceVersionFence(t *testing.T) {
 	}
 	if datasets.reads != 2 {
 		t.Fatalf("dataset reads=%d want=2", datasets.reads)
+	}
+	if !equalStrings(datasets.requests[0].Report.RequiredPermissions, []string{"event.read"}) || !equalStrings(versions.reports[0].RequiredPermissions, []string{"event.read"}) {
+		t.Fatalf("summary exact Permission did not reach dataset/source-version ports: datasets=%#v versions=%#v", datasets.requests, versions.reports)
 	}
 
 	versions.version = "version-2"
@@ -284,14 +316,16 @@ func (t *applicationTestTerminals) FailReportSnapshot(_ context.Context, request
 
 func TestSnapshotServiceOwnsClaimFencingAndAtomicTerminalNotification(t *testing.T) {
 	report := applicationTestReport(true)
+	subject := applicationTestSubject()
+	accessScopeHash := reportSnapshotAccessScopeHash(subject, reportDataPermissionKeys(report))
 	datasets := applicationTestDataset()
 	versions := &applicationTestVersions{version: "version-1"}
 	queries := &QueryService{
-		subjects: applicationTestSubjects{subject: applicationTestSubject()}, definitions: applicationTestDefinitions{reports: []reportmodel.ReportSchema{report}},
+		subjects: applicationTestSubjects{subject: subject}, definitions: applicationTestDefinitions{reports: []reportmodel.ReportSchema{report}},
 		datasets: datasets, sourceVersions: versions, cursorKey: []byte("report-test-cursor-key"), clock: time.Now,
 	}
 	store := &applicationTestSnapshotStore{claim: reportpersistence.SnapshotClaim{Disposition: reportpersistence.SnapshotClaimAcquired, Snapshot: reportpersistence.Snapshot{
-		ID: "snapshot-1", WorkspaceID: "workspace-1", ReportKey: report.Key, AccessScopeHash: "scope-1", IdempotencyKey: "refresh-1", Status: "refreshing", StartedAt: "2026-01-01T00:00:00Z", FencingToken: 7,
+		ID: "snapshot-1", WorkspaceID: "workspace-1", ReportKey: report.Key, AccessScopeHash: accessScopeHash, IdempotencyKey: "refresh-1", Status: "refreshing", StartedAt: "2026-01-01T00:00:00Z", FencingToken: 7,
 	}}}
 	terminals := &applicationTestTerminals{}
 	now := time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC)
@@ -309,13 +343,42 @@ func TestSnapshotServiceOwnsClaimFencingAndAtomicTerminalNotification(t *testing
 	if terminals.completeNote.EventType != "report.snapshot.completed" || terminals.completeNote.WorkspaceID != "workspace-1" || terminals.completeNote.SourceEventID != "report-snapshot:sales:refresh-1:completed" {
 		t.Fatalf("notification=%#v", terminals.completeNote)
 	}
-	if store.begin.AccessScopeHash != "scope-1" || store.begin.IdempotencyKey != "refresh-1" || store.begin.LeaseOwner == "" {
+	if store.begin.AccessScopeHash != accessScopeHash || store.begin.AccessScopeHash == subject.AccessScopeHash || store.begin.IdempotencyKey != "refresh-1" || store.begin.LeaseOwner == "" {
 		t.Fatalf("claim=%#v", store.begin)
+	}
+	if len(datasets.requests) != 1 || !equalStrings(datasets.requests[0].Report.RequiredPermissions, []string{"event.read"}) || len(versions.reports) != 2 || !equalStrings(versions.reports[0].RequiredPermissions, []string{"event.read"}) {
+		t.Fatalf("snapshot exact Permission did not reach dataset/source-version ports: datasets=%#v versions=%#v", datasets.requests, versions.reports)
 	}
 }
 
 func applicationTestSubject() reportmodel.ReportSubject {
-	return reportmodel.ReportSubject{Principal: identitysdk.Principal{Known: true, WorkspaceID: "workspace-1", UserID: "user-1", RoleKey: "manager"}, AccessScopeHash: "scope-1"}
+	return applicationTestSubjectWithPermissions(
+		reportsdk.ActionReportSummaryGet,
+		reportsdk.ActionReportQueryExecute,
+		reportsdk.ActionReportSnapshotsRefresh,
+		reportsdk.ActionReportExportsPrepare,
+		"event.read",
+		"event.export",
+		"order.read",
+		"order.export",
+	)
+
+}
+
+func applicationTestSubjectWithPermissions(permissions ...string) reportmodel.ReportSubject {
+	bundle := &identitysdk.AccessBundle{}
+	for _, permission := range permissions {
+		separator := strings.LastIndex(permission, ".")
+		if separator <= 0 || separator == len(permission)-1 {
+			continue
+		}
+		resource, action := permission[:separator], permission[separator+1:]
+		bundle.FunctionGrants = append(bundle.FunctionGrants, identitysdk.FunctionGrant{Resource: identitysdk.ResourceType(resource), Action: identitysdk.Action(action), Effect: identitysdk.EffectAllow})
+		bundle.DataPolicies = append(bundle.DataPolicies, identitysdk.DataPolicy{Key: permission, Resource: identitysdk.ResourceType(resource), Action: identitysdk.Action(action), Effect: identitysdk.EffectAllow, DataScopes: []identitysdk.DataScope{identitysdk.DataScopeAll}})
+	}
+	return reportmodel.ReportSubject{Principal: identitysdk.Principal{
+		Known: true, WorkspaceID: "workspace-1", UserID: "user-1", RoleKey: "manager", AccessBundle: bundle,
+	}, AccessScopeHash: "scope-1"}
 }
 
 func TestCrossWorkspaceReportUsesExplicitPermissionsInsteadOfRoleName(t *testing.T) {
@@ -331,6 +394,9 @@ func TestCrossWorkspaceReportUsesExplicitPermissionsInsteadOfRoleName(t *testing
 		Resource: identitysdk.ResourceType("report.cross_workspace_summary"),
 		Action:   identitysdk.Action("run"),
 		Effect:   identitysdk.EffectAllow,
+	}}, DataPolicies: []identitysdk.DataPolicy{{
+		Key: "report.cross_workspace_summary.run", Resource: identitysdk.ResourceType("report.cross_workspace_summary"),
+		Action: identitysdk.Action("run"), Effect: identitysdk.EffectAllow, DataScopes: []identitysdk.DataScope{identitysdk.DataScopeAll},
 	}}}
 	if !reportVisibleToSubject(report, subject) {
 		t.Fatal("an exact report permission must authorize independently of the role name")
@@ -340,6 +406,83 @@ func TestCrossWorkspaceReportUsesExplicitPermissionsInsteadOfRoleName(t *testing
 	subject.Principal.AccessBundle = nil
 	if reportVisibleToSubject(report, subject) {
 		t.Fatal("a role name must not bypass an absent exact report permission")
+	}
+}
+
+func TestReportEntryRequiresFunctionAndSameKeyDataPolicy(t *testing.T) {
+	report := applicationTestReport(false)
+	definitions := applicationTestDefinitions{reports: []reportmodel.ReportSchema{report}}
+	resolve := func(subject reportmodel.ReportSubject) error {
+		service := &QueryService{subjects: applicationTestSubjects{subject: subject}, definitions: definitions}
+		_, _, err := service.resolve(t.Context(), report.Key, reportmodel.ReportAuthority{AccessToken: "token"}, reportsdk.ActionReportSummaryGet)
+		return err
+	}
+
+	missingEntry := applicationTestSubjectWithPermissions("event.read")
+	assertReportSDKErrorCode(t, resolve(missingEntry), "backend.permission.denied")
+
+	functionOnly := applicationTestSubjectWithPermissions("event.read")
+	functionOnly.Principal.AccessBundle.FunctionGrants = append(functionOnly.Principal.AccessBundle.FunctionGrants, identitysdk.FunctionGrant{
+		Resource: "report.summary", Action: "get", Effect: identitysdk.EffectAllow,
+	})
+	assertReportSDKErrorCode(t, resolve(functionOnly), "backend.permission.denied")
+
+	dataOnly := applicationTestSubjectWithPermissions("event.read")
+	dataOnly.Principal.AccessBundle.DataPolicies = append(dataOnly.Principal.AccessBundle.DataPolicies, identitysdk.DataPolicy{
+		Key: reportsdk.ActionReportSummaryGet, Resource: "report.summary", Action: "get", Effect: identitysdk.EffectAllow, DataScopes: []identitysdk.DataScope{identitysdk.DataScopeAll},
+	})
+	assertReportSDKErrorCode(t, resolve(dataOnly), "backend.permission.denied")
+
+	missingSourcePolicy := applicationTestSubjectWithPermissions(reportsdk.ActionReportSummaryGet)
+	assertReportSDKErrorCode(t, resolve(missingSourcePolicy), "backend.report.not_found")
+
+	if err := resolve(applicationTestSubjectWithPermissions(reportsdk.ActionReportSummaryGet, "event.read")); err != nil {
+		t.Fatalf("complete exact Permission contracts were rejected: %v", err)
+	}
+}
+
+func TestReportDataPermissionNeverSwitchesForJoinedSources(t *testing.T) {
+	report := reportmodel.ReportSchema{Dataset: reportmodel.ReportDatasetSchema{
+		Source: reportmodel.ReportDatasetSource{ObjectKey: "order", Alias: "orders"},
+		Joins:  []reportmodel.ReportDatasetJoin{{ObjectKey: "customer", Alias: "customers"}},
+	}}
+	if permissions := reportDataPermissionKeys(report); !equalStrings(permissions, []string{"order.read"}) {
+		t.Fatalf("joined report permissions=%v", permissions)
+	}
+	report.RequiredPermissions = []string{" sales.region.read ", "sales.region.read"}
+	if permissions := reportDataPermissionKeys(report); !equalStrings(permissions, []string{"sales.region.read"}) {
+		t.Fatalf("authored report permissions=%v", permissions)
+	}
+	report = reportmodel.ReportSchema{ObjectSQLV1: &reportmodel.ReportObjectSQLSchema{SourceObjects: []string{"ledger", "employee"}}}
+	if permissions := reportDataPermissionKeys(report); !equalStrings(permissions, []string{"ledger.read"}) {
+		t.Fatalf("Object SQL permissions=%v", permissions)
+	}
+}
+
+func TestSnapshotAccessScopeBindsRequesterOrganizationAndPermission(t *testing.T) {
+	subject := applicationTestSubject()
+	base := reportSnapshotAccessScopeHash(subject, []string{"event.read"})
+
+	reordered := subject
+	reordered.Principal.OrgScopeIDs = []string{"child-b", "child-a"}
+	canonical := subject
+	canonical.Principal.OrgScopeIDs = []string{"child-a", "child-b"}
+	if reportSnapshotAccessScopeHash(reordered, []string{"event.read"}) != reportSnapshotAccessScopeHash(canonical, []string{"event.read"}) {
+		t.Fatal("snapshot organization scope hashing is not canonical")
+	}
+
+	otherUser := subject
+	otherUser.Principal.UserID = "user-2"
+	if reportSnapshotAccessScopeHash(otherUser, []string{"event.read"}) == base {
+		t.Fatal("snapshot scope did not bind the requester")
+	}
+	otherOrg := subject
+	otherOrg.Principal.OrgID = "org-2"
+	if reportSnapshotAccessScopeHash(otherOrg, []string{"event.read"}) == base {
+		t.Fatal("snapshot scope did not bind the natural organization")
+	}
+	if reportSnapshotAccessScopeHash(subject, []string{"event.export"}) == base {
+		t.Fatal("snapshot scope did not bind the exact data Permission")
 	}
 }
 
@@ -372,4 +515,16 @@ func assertReportSDKErrorCode(t *testing.T, err error, want string) {
 	if !errors.As(err, &stable) || stable.Code != want {
 		t.Fatalf("error=%v code=%q want=%q", err, stableErrorCode(err, ""), want)
 	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

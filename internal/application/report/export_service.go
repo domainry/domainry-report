@@ -34,11 +34,14 @@ func (s *ExportService) Prepare(ctx context.Context, request reportmodel.ReportE
 	if strings.TrimSpace(request.IdempotencyKey) == "" {
 		return reportmodel.ReportExportJob{}, reportError(400, "backend.idempotency.key_required", nil)
 	}
-	subject, definition, err := s.resolveCurrent(ctx, request.ReportKey, request.ObjectKey, authority)
+	subject, resolved, _, err := s.resolveExecution(ctx, reportmodel.ReportExportExecutionRequest{
+		ReportKey: request.ReportKey, ObjectKey: request.ObjectKey, Scope: request.Scope,
+	}, authority)
 	if err != nil {
 		return reportmodel.ReportExportJob{}, err
 	}
-	job, err := s.gateway.PrepareReportExport(ctx, request, definition.Report, definition.Control, subject)
+	request.Scope = resolved.Scope
+	job, err := s.gateway.PrepareReportExport(ctx, request, resolved.Definition.Report, resolved.Definition.Control, subject)
 	if err != nil {
 		return reportmodel.ReportExportJob{}, normalizeHostError(err, "backend.report.export_prepare_failed")
 	}
@@ -60,10 +63,13 @@ func (s *ExportService) ReadPage(ctx context.Context, request reportmodel.Report
 	if err != nil {
 		return reportmodel.ReportSummary{}, err
 	}
-	fingerprint := reportFingerprint(resolved.Definition.Report, map[string]any{
+	fingerprint := reportFingerprint(scoped, map[string]any{
 		"mode": "export", "object_key": strings.TrimSpace(request.ObjectKey), "scope": resolved.Scope,
 	}, subject)
 	if resolved.Scope.Freshness.Mode == "snapshot" {
+		if !samePermissionSet(reportDataPermissionKeys(resolved.Definition.Report), scoped.RequiredPermissions) {
+			return reportmodel.ReportSummary{}, reportError(400, "backend.report.export_snapshot_scope_unsupported", nil)
+		}
 		summary, err := s.queries.readSnapshot(ctx, resolved.Definition.Report, subject)
 		if err != nil {
 			return reportmodel.ReportSummary{}, err
@@ -114,11 +120,13 @@ func (s *ExportService) resolveExecution(ctx context.Context, request reportmode
 	if err != nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportExecution{}, reportmodel.ReportSchema{}, err
 	}
-	authorization := exportAuthorization{service: s, subject: subject}
-	normalized, scoped, _, err := reportexport.NormalizeScope(ctx, definition.Report, request.ObjectKey, definition.Control, request.Scope, subject.Principal.RoleKey, authorization)
+	exportPermission := reportExportDataPermission(request.ObjectKey)
+	authorization := exportAuthorization{service: s, subject: subject, dataPermissions: []string{exportPermission}}
+	normalized, scoped, _, err := reportexport.NormalizeScope(ctx, definition.Report, request.ObjectKey, definition.Control, request.Scope, authorization)
 	if err != nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportExecution{}, reportmodel.ReportSchema{}, exportApplicationError(err)
 	}
+	scoped = reportForDataPermissions(scoped, authorization.dataPermissions)
 	masked, err := reportexport.ValidateFieldAccess(ctx, scoped, definition.Control, authorization)
 	if err != nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportExecution{}, reportmodel.ReportSchema{}, exportApplicationError(err)
@@ -128,16 +136,17 @@ func (s *ExportService) resolveExecution(ctx context.Context, request reportmode
 }
 
 type exportAuthorization struct {
-	service *ExportService
-	subject reportmodel.ReportSubject
+	service         *ExportService
+	subject         reportmodel.ReportSubject
+	dataPermissions []string
 }
 
-func (a exportAuthorization) AuthorizeReportExportSource(ctx context.Context, objectKey string) (string, error) {
-	value, err := a.service.authorizer.AuthorizeReportExportSource(ctx, objectKey, a.subject)
+func (a exportAuthorization) AuthorizeReportExportSource(ctx context.Context, objectKey string) error {
+	err := a.service.authorizer.AuthorizeReportExportSource(ctx, objectKey, a.subject)
 	if err != nil {
-		return "", normalizeHostError(err, "backend.report.export_source_authorization_failed")
+		return normalizeHostError(err, "backend.report.export_source_authorization_failed")
 	}
-	return value, nil
+	return nil
 }
 
 func (a exportAuthorization) AuthorizeReportExportField(ctx context.Context, objectKey, fieldKey string) (bool, error) {
@@ -149,6 +158,7 @@ func (a exportAuthorization) AuthorizeReportExportField(ctx context.Context, obj
 }
 
 func (a exportAuthorization) AuthorizeReportObjectSQLExport(ctx context.Context, report reportmodel.ReportSchema) error {
+	report = reportForDataPermissions(report, a.dataPermissions)
 	plan, err := a.service.queries.compileAuthorizedObjectSQL(ctx, report, a.subject)
 	if err != nil {
 		return err
@@ -215,7 +225,7 @@ func exportApplicationError(err error) error {
 }
 
 func (s *ExportService) resolveCurrent(ctx context.Context, reportKey, objectKey string, authority reportmodel.ReportAuthority) (reportmodel.ReportSubject, reportmodel.ReportExportDefinition, error) {
-	subject, report, err := s.queries.resolve(ctx, reportKey, authority)
+	subject, report, err := s.queries.resolve(ctx, reportKey, authority, reportsdk.ActionReportExportsPrepare)
 	if err != nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportDefinition{}, err
 	}
@@ -233,6 +243,22 @@ func (s *ExportService) resolveCurrent(ctx context.Context, reportKey, objectKey
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportDefinition{}, reportError(400, "backend.report.export_control_not_found", nil)
 	}
 	return subject, reportmodel.ReportExportDefinition{Report: report, Control: control}, nil
+}
+
+func reportExportDataPermission(objectKey string) string {
+	return strings.TrimSpace(objectKey) + ".export"
+}
+
+func samePermissionSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if strings.TrimSpace(left[index]) != strings.TrimSpace(right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func reportIncludesExportObject(report reportmodel.ReportSchema, objectKey string) bool {

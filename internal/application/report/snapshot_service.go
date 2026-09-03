@@ -34,7 +34,7 @@ func (s *SnapshotService) Refresh(ctx context.Context, request reportmodel.Repor
 	if s == nil || s.queries == nil || s.store == nil || s.terminals == nil {
 		return reportmodel.ReportSnapshot{}, reportError(500, "backend.report.snapshot_unavailable", nil)
 	}
-	subject, report, err := s.queries.resolve(ctx, request.ReportKey, authority)
+	subject, report, err := s.queries.resolve(ctx, request.ReportKey, authority, reportsdk.ActionReportSnapshotsRefresh)
 	if err != nil {
 		return reportmodel.ReportSnapshot{}, err
 	}
@@ -45,13 +45,15 @@ func (s *SnapshotService) Refresh(ctx context.Context, request reportmodel.Repor
 	if idempotencyKey == "" {
 		return reportmodel.ReportSnapshot{}, reportError(400, "backend.idempotency.key_required", nil)
 	}
+	executionReport := reportForDataPermissions(report, reportDataPermissionKeys(report))
+	accessScopeHash := reportSnapshotAccessScopeHash(subject, executionReport.RequiredPermissions)
 	leaseOwner, err := newSnapshotLeaseOwner()
 	if err != nil {
 		return reportmodel.ReportSnapshot{}, reportError(500, "backend.report.snapshot_claim_failed", err)
 	}
 	now := s.clock().UTC()
 	claim, err := s.store.Claim(ctx, reportpersistence.SnapshotBeginRequest{
-		WorkspaceID: subject.Principal.WorkspaceID, ReportKey: report.Key, AccessScopeHash: subject.AccessScopeHash,
+		WorkspaceID: subject.Principal.WorkspaceID, ReportKey: report.Key, AccessScopeHash: accessScopeHash,
 		IdempotencyKey: idempotencyKey, StartedAt: now.Format(time.RFC3339Nano), LeaseOwner: leaseOwner,
 		LeaseExpiresAt: now.Add(2 * time.Minute).Format(time.RFC3339Nano),
 	})
@@ -71,16 +73,16 @@ func (s *SnapshotService) Refresh(ctx context.Context, request reportmodel.Repor
 	var terminalErr error
 	sourceChanged, stable := false, false
 	for attempt := 0; attempt < retries; attempt++ {
-		before, readErr := s.queries.sourceVersions.ReadReportSourceVersion(ctx, report, subject)
+		before, readErr := s.queries.sourceVersions.ReadReportSourceVersion(ctx, executionReport, subject)
 		if readErr != nil {
 			terminalErr = normalizeHostError(readErr, "backend.report.source_version_failed")
 			break
 		}
-		summary, terminalErr = s.queries.execute(ctx, report, nil, subject)
+		summary, terminalErr = s.queries.execute(ctx, executionReport, nil, subject)
 		if terminalErr != nil {
 			break
 		}
-		version, readErr = s.queries.sourceVersions.ReadReportSourceVersion(ctx, report, subject)
+		version, readErr = s.queries.sourceVersions.ReadReportSourceVersion(ctx, executionReport, subject)
 		if readErr != nil {
 			terminalErr = normalizeHostError(readErr, "backend.report.source_version_failed")
 			break
