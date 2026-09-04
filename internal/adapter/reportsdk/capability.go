@@ -12,7 +12,6 @@ import (
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
 	reportquery "github.com/domainry/domainry-report-sdk/query"
 	reportobjectsql "github.com/domainry/domainry-report/internal/domain/report/service/objectsql"
-	reportplan "github.com/domainry/domainry-report/internal/domain/report/service/plan"
 )
 
 const reportBusinessCategory = reportsdk.CapabilityReportBusiness
@@ -67,7 +66,7 @@ func NewCapabilityBinding(validator modulecapability.Validator) (*modulecapabili
 		return nil, err
 	}
 	document.ValidationContracts = []modulecapability.ValidationScopeContract{{
-		Kind: "report.definition", Description: "Validate one project report definition against Report's dataset or Object SQL contract.",
+		Kind: "report.definition", Description: "Validate one project report definition against Report's object_sql_v1 contract.",
 		Coverage: modulecapability.ValidationCoverageAllCandidates, CandidateCollections: []string{"reports"}, ReferencedCollections: []string{"objects"},
 	}}
 	summary := modulecapability.ModuleSummary{
@@ -129,8 +128,8 @@ func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.V
 			if _, err := reportobjectsql.CompileReportObjectSQL(*report.ObjectSQLV1, objects); err != nil {
 				return invalid("report.definition.object_sql_invalid", "$.candidate.value.object_sql_v1", err)
 			}
-		} else if _, err := reportplan.BuildReportDatasetPlan(report); err != nil {
-			return invalid("report.definition.dataset_invalid", "$.candidate.value.dataset", err)
+		} else {
+			return invalid("report.definition.object_sql_required", "$.candidate.value.object_sql_v1", fmt.Errorf("object_sql_v1 is required"))
 		}
 	default:
 		return modulecapability.ValidationResult{}, &modulecapability.Error{StatusCode: 400, Code: "module_capability.validation_scope_invalid"}

@@ -20,12 +20,9 @@ func TestReportUsesInternalLayeredLayout(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", ".."))
 	for _, required := range []string{
 		"internal/application/report",
-		"internal/domain/report/model",
 		"internal/domain/report/repository",
-		"internal/domain/report/service/engine",
 		"internal/domain/report/service/export",
 		"internal/domain/report/service/objectsql",
-		"internal/domain/report/service/plan",
 		"internal/adapter/reportsdk",
 		"internal/assembly/module",
 		"internal/infrastructure/persistence/database/report",

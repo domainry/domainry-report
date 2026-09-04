@@ -36,7 +36,7 @@ func TestReportCapabilityTracksOwnerRoutesAndValidation(t *testing.T) {
 		ContractSHA256: summary.Identity.ContractSHA256, Kind: "report.definition",
 		Candidate: modulecapability.AuthoringFragment{
 			Collection: "reports", Key: "orders",
-			Value: json.RawMessage(`{"key":"orders","dataset":{"source":{}}}`),
+			Value: json.RawMessage(`{"key":"orders"}`),
 		},
 	}
 	result, err := binding.ValidateCapabilityCandidate(t.Context(), request)

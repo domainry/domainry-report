@@ -18,15 +18,13 @@ import (
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
 	"github.com/domainry/domainry-report-sdk/modulehost"
 	reportpersistence "github.com/domainry/domainry-report-sdk/persistence"
-	reportengine "github.com/domainry/domainry-report/internal/domain/report/service/engine"
+	reportquery "github.com/domainry/domainry-report-sdk/query"
 	reportobjectsql "github.com/domainry/domainry-report/internal/domain/report/service/objectsql"
-	reportplan "github.com/domainry/domainry-report/internal/domain/report/service/plan"
 )
 
 type QueryService struct {
 	subjects       modulehost.SubjectResolver
 	definitions    DefinitionProvider
-	datasets       modulehost.DatasetReader
 	objectSQL      modulehost.ObjectSQLExecutor
 	sourceVersions modulehost.SourceVersionReader
 	audit          modulehost.ExecutionAudit
@@ -51,7 +49,7 @@ func NewQueryService(host modulehost.ApplicationHost, definitions DefinitionProv
 		clock = time.Now
 	}
 	return &QueryService{
-		subjects: host.ReportSubjects(), definitions: definitions, datasets: host.ReportDatasets(),
+		subjects: host.ReportSubjects(), definitions: definitions,
 		objectSQL: host.ReportObjectSQL(), sourceVersions: host.ReportSourceVersions(), audit: host.ReportExecutionAudit(),
 		snapshots: snapshots, cursorKey: append([]byte(nil), host.ReportCursorSigningKey()...), clock: clock,
 	}
@@ -67,7 +65,7 @@ func (s *QueryService) Summary(ctx context.Context, request reportmodel.ReportSu
 		mode = "realtime"
 	}
 	if mode == "snapshot" {
-		if strings.TrimSpace(request.QueryKey) != "" || len(request.Tags) != 0 {
+		if len(request.Parameters) != 0 {
 			return reportmodel.ReportSummary{}, reportError(400, "backend.report.snapshot_scope_unsupported", nil)
 		}
 		summary, err := s.readSnapshot(ctx, report, subject)
@@ -80,19 +78,12 @@ func (s *QueryService) Summary(ctx context.Context, request reportmodel.ReportSu
 		return reportmodel.ReportSummary{}, reportError(400, "backend.report.execution_mode_invalid", nil)
 	}
 	scoped := reportForDataPermissions(report, reportDataPermissionKeys(report))
-	if strings.TrimSpace(request.QueryKey) != "" || len(request.Tags) != 0 {
-		if report.ObjectSQLV1 != nil {
-			return reportmodel.ReportSummary{}, reportError(400, "backend.report.object_sql_scope_unsupported", nil)
-		}
-		scoped, err = reportengine.ApplyDeclaredPredicates(scoped, request.QueryKey, request.Tags)
-		if err != nil {
-			return reportmodel.ReportSummary{}, predicateApplicationError(err)
-		}
+	normalized, err := reportobjectsql.NormalizeParameters(report.ObjectSQLV1.Parameters, request.Parameters)
+	if err != nil {
+		return reportmodel.ReportSummary{}, objectSQLApplicationError(err)
 	}
-	fingerprint := reportFingerprint(scoped, map[string]any{"mode": mode, "query_key": strings.TrimSpace(request.QueryKey), "tags": request.Tags}, subject)
-	summary, err := s.executeStablePage(ctx, scoped, request.Page, fingerprint, subject, func() (reportmodel.ReportSummary, error) {
-		return s.execute(ctx, scoped, nil, subject)
-	})
+	fingerprint := reportFingerprint(scoped, map[string]any{"mode": mode, "parameters": normalized}, subject)
+	summary, err := s.executeStableObjectSQLPage(ctx, scoped, normalized, request.Page, fingerprint, subject)
 	if err != nil {
 		return reportmodel.ReportSummary{}, err
 	}
@@ -146,10 +137,18 @@ func (s *QueryService) resolve(ctx context.Context, reportKey string, authority 
 		if strings.TrimSpace(report.Key) != reportKey {
 			continue
 		}
-		if !reportVisibleToSubject(report, subject) || !subject.HasAllPermissions(reportDataPermissionKeys(report)) {
+		resolvedSubject := subject
+		if resolvedSubject.TrustedProcess {
+			// The trusted process must already hold the report operation grant.
+			// Once the report key is resolved, Report narrows the execution to
+			// that definition's exact source permissions before crossing any
+			// Report execution or host boundary.
+			resolvedSubject = resolvedSubject.WithExactProcessCapabilities(reportDataPermissionKeys(report)...)
+		}
+		if !reportVisibleToSubject(report, resolvedSubject) || !resolvedSubject.HasAllPermissions(reportDataPermissionKeys(report)) {
 			break
 		}
-		return subject, report, nil
+		return resolvedSubject, report, nil
 	}
 	return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(404, "backend.report.not_found", nil)
 }
@@ -170,7 +169,7 @@ func reportDataPermissionKeys(report reportmodel.ReportSchema) []string {
 		permissions = append(permissions, permission)
 	}
 	if len(permissions) == 0 {
-		objectKey := strings.TrimSpace(report.Dataset.Source.ObjectKey)
+		objectKey := ""
 		if report.ObjectSQLV1 != nil && len(report.ObjectSQLV1.SourceObjects) > 0 {
 			objectKey = strings.TrimSpace(report.ObjectSQLV1.SourceObjects[0])
 		}
@@ -191,7 +190,10 @@ func reportForDataPermissions(report reportmodel.ReportSchema, permissions []str
 }
 
 func reportVisibleToSubject(report reportmodel.ReportSchema, subject reportmodel.ReportSubject) bool {
-	if len(report.AudienceRoles) > 0 {
+	// AudienceRoles constrain interactive human access. Trusted embedded
+	// processes (for example a source-declared Scheduler snapshot refresh) have
+	// no human role and are instead limited by their exact process capabilities.
+	if len(report.AudienceRoles) > 0 && !subject.TrustedProcess {
 		role := strings.TrimSpace(subject.Principal.RoleKey)
 		allowed := false
 		for _, candidate := range report.AudienceRoles {
@@ -231,98 +233,10 @@ func (s *QueryService) resolveSubject(ctx context.Context, authority reportmodel
 }
 
 func (s *QueryService) execute(ctx context.Context, report reportmodel.ReportSchema, parameters map[string]any, subject reportmodel.ReportSubject) (reportmodel.ReportSummary, error) {
-	if report.ObjectSQLV1 != nil {
-		return s.executeObjectSQL(ctx, report, parameters, subject)
+	if report.ObjectSQLV1 == nil {
+		return reportmodel.ReportSummary{}, reportError(400, "backend.report.object_sql_not_enabled", nil)
 	}
-	if s.datasets == nil {
-		return reportmodel.ReportSummary{}, reportError(500, "backend.report.execution_unavailable", nil)
-	}
-	plan, err := reportplan.BuildReportDatasetPlan(report)
-	if err != nil {
-		return reportmodel.ReportSummary{}, datasetPlanApplicationError(err)
-	}
-	read, err := s.datasets.ReadReportDataset(ctx, reportmodel.ReportDatasetReadRequest{Report: report, Plan: plan, Subject: subject})
-	if err != nil {
-		return reportmodel.ReportSummary{}, normalizeHostError(err, "backend.report.query_failed")
-	}
-	rows := reportDatasetSourceRows(read, report.Dataset)
-	for _, join := range report.Dataset.Joins {
-		if err := reportengine.ValidateJoinedCardinality(rows, join); err != nil {
-			return reportmodel.ReportSummary{}, reportError(409, "backend.report.join_cardinality_violated", err)
-		}
-	}
-	filtered := rows[:0]
-	for _, row := range rows {
-		if reportengine.RowMatchesFilters(row, report.Dataset.Filters) {
-			filtered = append(filtered, row)
-		}
-	}
-	rows = reportengine.ApplyRuntimeQuery(filtered, report.Dataset.RuntimeQuery)
-	rows = reportengine.ApplyRuntimeTags(rows, report.Dataset.RuntimeTags)
-	analyses, err := reportengine.ExecuteAnalyses(rows, report.Dataset)
-	if err != nil {
-		return reportmodel.ReportSummary{}, reportError(400, "backend.report.analysis_invalid", err)
-	}
-	objects := make(map[string]reportengine.Object, len(read.Objects))
-	for alias, source := range read.Objects {
-		objects[alias] = reportEngineObject(source)
-	}
-	dataset := report.Dataset
-	dataset.Measures = append([]reportmodel.ReportDatasetMeasure(nil), report.Dataset.Measures...)
-	rootAlias := strings.TrimSpace(dataset.Source.Alias)
-	for index := range dataset.Measures {
-		if dataset.Measures[index].Operation == "count" && strings.TrimSpace(dataset.Measures[index].SourceAlias) == "" {
-			dataset.Measures[index].SourceAlias = rootAlias
-		}
-	}
-	aggregated, err := reportengine.Aggregate(rows, dataset, objects)
-	if err != nil {
-		var calculation *reportengine.CalculationError
-		if errors.As(err, &calculation) && calculation.Stage == "comparison" {
-			return reportmodel.ReportSummary{}, reportError(400, "backend.report.comparison_invalid", err)
-		}
-		return reportmodel.ReportSummary{}, reportError(400, "backend.report.execution_invalid", err)
-	}
-	return reportmodel.ReportSummary{Key: report.Key, Name: report.Name, Rows: aggregated.Rows, RowCount: len(aggregated.Rows), SourceRowCount: aggregated.VisibleSourceRows, Analyses: analyses, ExecutionMode: "realtime"}, nil
-}
-
-func reportDatasetSourceRows(read reportmodel.ReportDatasetReadResult, dataset reportmodel.ReportDatasetSchema) []reportengine.Row {
-	if read.Records != nil {
-		rootAlias := strings.TrimSpace(dataset.Source.Alias)
-		root := read.Records[rootAlias]
-		rows := make([]reportengine.Row, 0, len(root))
-		for index := range root {
-			record := reportEngineRecord(root[index])
-			rows = append(rows, reportengine.Row{rootAlias: &record})
-		}
-		for _, join := range dataset.Joins {
-			raw := read.Records[strings.TrimSpace(join.Alias)]
-			records := make([]reportengine.Record, len(raw))
-			for index := range raw {
-				records[index] = reportEngineRecord(raw[index])
-			}
-			rows = reportengine.JoinRows(rows, records, join)
-		}
-		return rows
-	}
-	rows := make([]reportengine.Row, 0, len(read.Rows))
-	for _, sourceRow := range read.Rows {
-		row := make(reportengine.Row, len(sourceRow))
-		for alias, source := range sourceRow {
-			if source == nil {
-				row[alias] = nil
-				continue
-			}
-			record := reportEngineRecord(*source)
-			row[alias] = &record
-		}
-		rows = append(rows, row)
-	}
-	return rows
-}
-
-func reportEngineRecord(source reportmodel.ReportSourceRecord) reportengine.Record {
-	return reportengine.Record{ID: source.ID, Data: source.Data, CreatedAt: source.CreatedAt, UpdatedAt: source.UpdatedAt}
+	return s.executeObjectSQL(ctx, report, parameters, subject)
 }
 
 func (s *QueryService) executeObjectSQL(ctx context.Context, report reportmodel.ReportSchema, parameters map[string]any, subject reportmodel.ReportSubject) (reportmodel.ReportSummary, error) {
@@ -383,7 +297,7 @@ func (s *QueryService) compileAuthorizedObjectSQL(ctx context.Context, report re
 	if err != nil {
 		return reportmodel.ReportObjectSQLPlan{}, normalizeHostError(err, "backend.report.object_sql_source_resolution_failed")
 	}
-	objects := make(map[string]reportengine.Object, len(sources))
+	objects := make(map[string]reportquery.Object, len(sources))
 	for key, source := range sources {
 		objects[key] = reportEngineObject(source)
 	}
@@ -400,12 +314,12 @@ func (s *QueryService) compileAuthorizedObjectSQL(ctx context.Context, report re
 	return plan, nil
 }
 
-func reportEngineObject(source reportmodel.ReportSourceObject) reportengine.Object {
-	fields := make([]reportengine.Field, 0, len(source.Fields))
+func reportEngineObject(source reportmodel.ReportSourceObject) reportquery.Object {
+	fields := make([]reportquery.Field, 0, len(source.Fields))
 	for _, field := range source.Fields {
-		fields = append(fields, reportengine.Field{Key: field.Key, Type: field.Type, Precision: field.Precision, Scale: field.Scale})
+		fields = append(fields, reportquery.Field{Key: field.Key, Type: field.Type, Precision: field.Precision, Scale: field.Scale})
 	}
-	return reportengine.Object{Key: source.Key, Fields: fields}
+	return reportquery.Object{Key: source.Key, Fields: fields}
 }
 
 func (s *QueryService) readSnapshot(ctx context.Context, report reportmodel.ReportSchema, subject reportmodel.ReportSubject) (reportmodel.ReportSummary, error) {
@@ -721,14 +635,6 @@ func normalizeHostError(err error, code string) error {
 	return reportError(500, code, err)
 }
 
-func datasetPlanApplicationError(err error) error {
-	var planErr *reportmodel.ReportDatasetPlanError
-	if errors.As(err, &planErr) {
-		return &reportsdk.Error{StatusCode: 400, Code: planErr.Code, Params: planErr.Params, Cause: planErr}
-	}
-	return reportError(400, "backend.report.dataset_invalid", err)
-}
-
 func objectSQLApplicationError(err error) error {
 	var planErr *reportmodel.ReportObjectSQLPlanError
 	if errors.As(err, &planErr) {
@@ -739,14 +645,6 @@ func objectSQLApplicationError(err error) error {
 		return &reportsdk.Error{StatusCode: 400, Code: applicationErr.Code, Params: applicationErr.Params, Cause: applicationErr}
 	}
 	return reportError(400, "backend.report.object_sql_invalid", err)
-}
-
-func predicateApplicationError(err error) error {
-	var predicate *reportengine.PredicateError
-	if errors.As(err, &predicate) {
-		return reportError(400, predicate.Code, predicate)
-	}
-	return reportError(400, "backend.report.predicate_invalid", err)
 }
 
 var _ reportsdk.Queries = (*QueryService)(nil)

@@ -61,7 +61,7 @@ func (b *Binding) DefinitionRepository() reportpersistence.DefinitionRepository 
 }
 
 func (b *Binding) BindApplicationHost(host modulehost.ApplicationHost) error {
-	if host == nil || host.ReportSubjects() == nil || host.ReportDatasets() == nil || host.ReportObjectSQL() == nil || host.ReportSourceVersions() == nil || host.ReportExecutionAudit() == nil || host.ReportExportAuthorization() == nil || host.ReportSnapshotTerminals() == nil || host.ReportExports() == nil || len(host.ReportCursorSigningKey()) == 0 {
+	if host == nil || host.ReportSubjects() == nil || host.ReportObjectSQL() == nil || host.ReportSourceVersions() == nil || host.ReportExecutionAudit() == nil || host.ReportExportAuthorization() == nil || host.ReportSnapshotTerminals() == nil || host.ReportExports() == nil || len(host.ReportCursorSigningKey()) == 0 {
 		return fmt.Errorf("Report application host is incomplete")
 	}
 	definitions := storedDefinitionProvider{repository: b.service.Definitions()}

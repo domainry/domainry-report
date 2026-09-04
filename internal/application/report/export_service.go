@@ -66,33 +66,7 @@ func (s *ExportService) ReadPage(ctx context.Context, request reportmodel.Report
 	fingerprint := reportFingerprint(scoped, map[string]any{
 		"mode": "export", "object_key": strings.TrimSpace(request.ObjectKey), "scope": resolved.Scope,
 	}, subject)
-	if resolved.Scope.Freshness.Mode == "snapshot" {
-		if !samePermissionSet(reportDataPermissionKeys(resolved.Definition.Report), scoped.RequiredPermissions) {
-			return reportmodel.ReportSummary{}, reportError(400, "backend.report.export_snapshot_scope_unsupported", nil)
-		}
-		summary, err := s.queries.readSnapshot(ctx, resolved.Definition.Report, subject)
-		if err != nil {
-			return reportmodel.ReportSummary{}, err
-		}
-		if !exportSnapshotFreshnessSatisfied(summary, resolved.Scope.Freshness) {
-			return reportmodel.ReportSummary{}, reportError(409, "backend.report.export_freshness_not_satisfied", nil)
-		}
-		summary, err = selectExportRows(summary, resolved.Scope.AnalysisKey)
-		if err != nil {
-			return reportmodel.ReportSummary{}, err
-		}
-		return s.queries.paginateImmutable(summary, request.Page, fingerprint, summary.Snapshot.SnapshotID)
-	}
-	if scoped.ObjectSQLV1 != nil {
-		return s.queries.executeStableObjectSQLPage(ctx, scoped, resolved.Scope.Parameters, request.Page, fingerprint, subject)
-	}
-	return s.queries.executeStablePage(ctx, scoped, request.Page, fingerprint, subject, func() (reportmodel.ReportSummary, error) {
-		summary, err := s.queries.execute(ctx, scoped, nil, subject)
-		if err != nil {
-			return reportmodel.ReportSummary{}, err
-		}
-		return selectExportRows(summary, resolved.Scope.AnalysisKey)
-	})
+	return s.queries.executeStableObjectSQLPage(ctx, scoped, resolved.Scope.Parameters, request.Page, fingerprint, subject)
 }
 
 // SourceVersion resolves the same authorized, scoped definition as ReadPage
@@ -127,11 +101,10 @@ func (s *ExportService) resolveExecution(ctx context.Context, request reportmode
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportExecution{}, reportmodel.ReportSchema{}, exportApplicationError(err)
 	}
 	scoped = reportForDataPermissions(scoped, authorization.dataPermissions)
-	masked, err := reportexport.ValidateFieldAccess(ctx, scoped, definition.Control, authorization)
-	if err != nil {
+	if err := reportexport.ValidateFieldAccess(ctx, scoped, definition.Control, authorization); err != nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportExecution{}, reportmodel.ReportSchema{}, exportApplicationError(err)
 	}
-	resolved := reportmodel.ReportExportExecution{Definition: definition, Scope: normalized, MaskedDimensions: masked}
+	resolved := reportmodel.ReportExportExecution{Definition: definition, Scope: normalized}
 	return subject, resolved, scoped, nil
 }
 
@@ -175,23 +148,6 @@ func (a exportAuthorization) AuthorizeReportObjectSQLExport(ctx context.Context,
 		}
 	}
 	return nil
-}
-
-func exportSnapshotFreshnessSatisfied(summary reportmodel.ReportSummary, freshness reportmodel.ReportExportFreshness) bool {
-	return summary.Snapshot != nil &&
-		(freshness.SnapshotID == "" || freshness.SnapshotID == summary.Snapshot.SnapshotID) &&
-		(freshness.MaximumLagSeconds <= 0 || summary.Snapshot.LagSeconds <= freshness.MaximumLagSeconds)
-}
-
-func selectExportRows(summary reportmodel.ReportSummary, analysisKey string) (reportmodel.ReportSummary, error) {
-	rows, err := reportexport.Rows(summary, analysisKey)
-	if err != nil {
-		return reportmodel.ReportSummary{}, exportApplicationError(err)
-	}
-	summary.Rows = append([]reportmodel.ReportResultRow(nil), rows...)
-	summary.Analyses = nil
-	summary.RowCount = len(summary.Rows)
-	return summary, nil
 }
 
 func exportApplicationError(err error) error {
@@ -249,25 +205,9 @@ func reportExportDataPermission(objectKey string) string {
 	return strings.TrimSpace(objectKey) + ".export"
 }
 
-func samePermissionSet(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if strings.TrimSpace(left[index]) != strings.TrimSpace(right[index]) {
-			return false
-		}
-	}
-	return true
-}
-
 func reportIncludesExportObject(report reportmodel.ReportSchema, objectKey string) bool {
 	objectKey = strings.TrimSpace(objectKey)
-	objectKeys := reportmodel.ReportDatasetObjectKeys(report.Dataset)
-	if report.ObjectSQLV1 != nil {
-		objectKeys = reportmodel.ReportObjectSQLObjectKeys(report.ObjectSQLV1)
-	}
-	for _, candidate := range objectKeys {
+	for _, candidate := range reportmodel.ReportObjectSQLObjectKeys(report.ObjectSQLV1) {
 		if strings.TrimSpace(candidate) == objectKey && objectKey != "" {
 			return true
 		}

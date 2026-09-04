@@ -38,7 +38,6 @@ type integrationHost struct {
 	registrar           *integrationMigrationRegistrar
 	snapshots           reportpersistence.SnapshotRepository
 	failNextExport      atomic.Bool
-	datasetReads        atomic.Int64
 	objectSQLExecutions atomic.Int64
 }
 
@@ -54,7 +53,6 @@ func (h *integrationHost) Migrations() modulehost.MigrationRegistrar {
 	return h.registrar
 }
 func (h *integrationHost) ReportSubjects() modulehost.SubjectResolver { return h }
-func (h *integrationHost) ReportDatasets() modulehost.DatasetReader   { return h }
 func (h *integrationHost) ReportObjectSQL() modulehost.ObjectSQLExecutor {
 	return h
 }
@@ -199,43 +197,6 @@ func integrationSubject(workspaceID, userID string, permissions ...string) repor
 	}, AccessScopeHash: "scope:" + workspaceID + ":" + userID}
 }
 
-func (h *integrationHost) ReadReportDataset(ctx context.Context, request reportmodel.ReportDatasetReadRequest) (reportmodel.ReportDatasetReadResult, error) {
-	if request.Plan.ReportKey != request.Report.Key || request.Plan.AliasObjects["sales"] != "sale" {
-		return reportmodel.ReportDatasetReadResult{}, fmt.Errorf("unexpected Report dataset plan")
-	}
-	if !request.Subject.HasAllPermissions(request.Report.RequiredPermissions) {
-		return reportmodel.ReportDatasetReadResult{}, &reportsdk.Error{StatusCode: 403, Code: "backend.permission.denied"}
-	}
-	h.datasetReads.Add(1)
-	statement, arguments, err := ormquery.NewWorkspaceSelectBuilder(h.dialect, "host_sales", request.Subject.Principal.WorkspaceID).
-		Columns("id", "region", "status", "amount", "updated_at").OrderBy(ormquery.Ascending("id")).Build()
-	if err != nil {
-		return reportmodel.ReportDatasetReadResult{}, err
-	}
-	rows, err := h.DatabaseFor(ctx).QueryContext(ctx, statement, arguments...)
-	if err != nil {
-		return reportmodel.ReportDatasetReadResult{}, err
-	}
-	defer rows.Close()
-	records := []reportmodel.ReportSourceRecord{}
-	for rows.Next() {
-		var id, region, status, amount, updatedAt string
-		if err := rows.Scan(&id, &region, &status, &amount, &updatedAt); err != nil {
-			return reportmodel.ReportDatasetReadResult{}, err
-		}
-		records = append(records, reportmodel.ReportSourceRecord{ID: id, UpdatedAt: updatedAt, Data: map[string]any{
-			"id": id, "region": region, "status": status, "amount": amount,
-		}})
-	}
-	if err := rows.Err(); err != nil {
-		return reportmodel.ReportDatasetReadResult{}, err
-	}
-	return reportmodel.ReportDatasetReadResult{
-		Records: map[string][]reportmodel.ReportSourceRecord{"sales": records},
-		Objects: map[string]reportmodel.ReportSourceObject{"sales": integrationSaleObject()},
-	}, nil
-}
-
 func integrationSaleObject() reportmodel.ReportSourceObject {
 	return reportmodel.ReportSourceObject{Key: "sale", Fields: []reportmodel.ReportSourceField{
 		{Key: "id", Type: "text"}, {Key: "region", Type: "text"}, {Key: "status", Type: "text"},
@@ -255,7 +216,7 @@ func (*integrationHost) AuthorizeReportObjectSQLPlan(_ context.Context, report r
 		return &reportsdk.Error{StatusCode: 403, Code: "backend.permission.denied"}
 	}
 	for _, field := range plan.Sources[0].Fields {
-		if field != "id" && field != "region" && field != "amount" {
+		if field != "id" && field != "region" && field != "status" && field != "amount" {
 			return &reportsdk.Error{StatusCode: 403, Code: "backend.report.object_sql_field_authorization_failed"}
 		}
 	}
@@ -263,6 +224,50 @@ func (*integrationHost) AuthorizeReportObjectSQLPlan(_ context.Context, report r
 }
 
 func (h *integrationHost) ExecuteReportObjectSQL(ctx context.Context, request reportmodel.ReportObjectSQLExecutionRequest) (reportmodel.ReportObjectSQLExecutionResult, error) {
+	if request.Report.Key == "sales-summary" {
+		status, ok := request.Parameters["status"].(string)
+		if !ok {
+			return reportmodel.ReportObjectSQLExecutionResult{}, fmt.Errorf("normalized text parameter was not supplied")
+		}
+		rows, err := h.DatabaseFor(ctx).QueryContext(ctx, "SELECT region, SUM(amount), COUNT(id) FROM host_sales WHERE workspace_id = ? AND status = ? GROUP BY region ORDER BY region", request.Subject.Principal.WorkspaceID, status)
+		if err != nil {
+			return reportmodel.ReportObjectSQLExecutionResult{}, err
+		}
+		defer rows.Close()
+		values := []map[string]string{}
+		for rows.Next() {
+			var region, total string
+			var orders int
+			if err := rows.Scan(&region, &total, &orders); err != nil {
+				return reportmodel.ReportObjectSQLExecutionResult{}, err
+			}
+			amount, err := decimal.NewFromString(total)
+			if err != nil {
+				return reportmodel.ReportObjectSQLExecutionResult{}, err
+			}
+			values = append(values, map[string]string{"region": region, "total": amount.StringFixed(2), "orders": fmt.Sprint(orders)})
+		}
+		if err := rows.Err(); err != nil {
+			return reportmodel.ReportObjectSQLExecutionResult{}, err
+		}
+		pageSize := request.PageSize
+		if pageSize <= 0 {
+			pageSize = len(values)
+		}
+		start := 0
+		if request.PageCursor != "" {
+			for start < len(values) && values[start]["region"] <= request.PageCursor {
+				start++
+			}
+		}
+		end := min(start+pageSize, len(values))
+		result := reportmodel.ReportObjectSQLExecutionResult{Rows: values[start:end], Total: len(values), TotalKnown: true, HasMore: end < len(values)}
+		if result.HasMore && end > start {
+			result.NextCursor = values[end-1]["region"]
+		}
+		h.objectSQLExecutions.Add(1)
+		return result, nil
+	}
 	minimum, ok := request.Parameters["minimum"].(string)
 	if !ok {
 		return reportmodel.ReportObjectSQLExecutionResult{}, fmt.Errorf("normalized decimal parameter was not supplied")
@@ -557,20 +562,13 @@ func integrationHostTables(renderer modulehost.Dialect) []*ormschema.TableBuilde
 
 func integrationDefinitions(t *testing.T) reportpersistence.DefinitionSnapshot {
 	t.Helper()
-	amountField := reportmodel.ReportDatasetField{SourceAlias: "sales", FieldKey: "amount"}
 	summary := reportmodel.ReportSchema{
 		Key: "sales-summary", Name: "Sales summary", RequiredPermissions: []string{"sale.read"}, AudienceRoles: []string{"analyst"},
 		Materialization: &reportmodel.ReportMaterializationPolicy{MaximumLagSeconds: 300, ConsistencyRetries: 2},
-		Dataset: reportmodel.ReportDatasetSchema{
-			Source: reportmodel.ReportDatasetSource{ObjectKey: "sale", Alias: "sales"}, TimeZone: "UTC",
-			QueryPredicates: []reportmodel.ReportDatasetPredicate{{Key: "paid", Filters: []reportmodel.ReportDatasetFilter{{
-				Field: reportmodel.ReportDatasetField{SourceAlias: "sales", FieldKey: "status"}, Operator: "eq", Value: "paid",
-			}}}},
-			Dimensions: []reportmodel.ReportDatasetDimension{{Key: "region", Field: reportmodel.ReportDatasetField{SourceAlias: "sales", FieldKey: "region"}}},
-			Measures: []reportmodel.ReportDatasetMeasure{
-				{Key: "total", Operation: "sum", Field: &amountField}, {Key: "orders", Operation: "count", SourceAlias: "sales"},
-			},
-			Sort: []reportmodel.ReportDatasetSort{{Key: "region", Direction: "asc"}},
+		ObjectSQLV1: &reportmodel.ReportObjectSQLSchema{
+			SQL:           "SELECT s.region AS region, SUM(s.amount) AS total, COUNT(s.id) AS orders FROM sale AS s WHERE s.status = :status GROUP BY s.region ORDER BY s.region LIMIT 100",
+			SourceObjects: []string{"sale"}, Parameters: []reportmodel.ReportObjectSQLParameter{{Key: "status", Type: "text", Default: "paid"}},
+			ResultSchema: []reportmodel.ReportResultColumnSchema{{Key: "region", Type: "text", Kind: "dimension"}, {Key: "total", Type: "currency", Kind: "measure", Precision: 19, Scale: 2}, {Key: "orders", Type: "integer", Kind: "measure"}},
 		},
 	}
 	objectSQL := reportmodel.ReportSchema{
@@ -582,7 +580,7 @@ func integrationDefinitions(t *testing.T) reportpersistence.DefinitionSnapshot {
 		},
 	}
 	control := reportmodel.ReportExportControlSchema{
-		Key: "sales-summary-export", ReportKey: summary.Key, SourceObjects: []string{"sale"}, AllowedQueryKeys: []string{"paid"}, MaxRows: 1000,
+		Key: "sales-summary-export", ReportKey: summary.Key, SourceObjects: []string{"sale"}, MaxRows: 1000,
 	}
 	definitions := []reportpersistence.Definition{
 		integrationDefinition(t, "report", summary.Key, "", summary.Name, summary),
@@ -622,7 +620,7 @@ func integrationExportRequest(idempotencyKey string) reportmodel.ReportExportPre
 	return reportmodel.ReportExportPrepareRequest{
 		ReportKey: "sales-summary", ObjectKey: "sale", AuditID: "audit-" + idempotencyKey, IdempotencyKey: idempotencyKey,
 		Scope: reportmodel.ReportExportScopeRequest{
-			QueryKey: "paid", Purpose: "financial audit", FieldProjection: []string{"region", "total", "orders"},
+			Parameters: map[string]any{"status": "paid"}, Purpose: "financial audit", FieldProjection: []string{"region", "total", "orders"},
 			Freshness: reportmodel.ReportExportFreshness{Mode: "realtime"},
 		},
 	}
@@ -700,7 +698,7 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 	full := integrationAuthority("workspace-a-full")
 	t.Run("workspace scoped decimal query and opaque pagination", func(t *testing.T) {
 		first, err := application.Queries().Summary(t.Context(), reportmodel.ReportSummaryRequest{
-			ReportKey: "sales-summary", QueryKey: "paid", Page: reportmodel.ReportPageRequest{PageSize: 1},
+			ReportKey: "sales-summary", Parameters: map[string]any{"status": "paid"}, Page: reportmodel.ReportPageRequest{PageSize: 1},
 		}, full)
 		if err != nil {
 			t.Fatal(err)
@@ -709,7 +707,7 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 			t.Fatalf("first summary page=%#v", first)
 		}
 		second, err := application.Queries().Summary(t.Context(), reportmodel.ReportSummaryRequest{
-			ReportKey: "sales-summary", QueryKey: "paid", Page: reportmodel.ReportPageRequest{PageSize: 1, Cursor: first.NextCursor},
+			ReportKey: "sales-summary", Parameters: map[string]any{"status": "paid"}, Page: reportmodel.ReportPageRequest{PageSize: 1, Cursor: first.NextCursor},
 		}, full)
 		if err != nil {
 			t.Fatal(err)
@@ -717,11 +715,11 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 		if second.RowCount != 1 || second.Truncated || second.Rows[0].Dimensions["region"] != "south" || second.Rows[0].Measures["total"] != "10.10" {
 			t.Fatalf("second summary page=%#v", second)
 		}
-		workspaceB, err := application.Queries().Summary(t.Context(), reportmodel.ReportSummaryRequest{ReportKey: "sales-summary", QueryKey: "paid"}, integrationAuthority("workspace-b-read"))
+		workspaceB, err := application.Queries().Summary(t.Context(), reportmodel.ReportSummaryRequest{ReportKey: "sales-summary", Parameters: map[string]any{"status": "paid"}}, integrationAuthority("workspace-b-read"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if workspaceB.RowCount != 1 || workspaceB.Rows[0].Measures["total"] != "999.99" || workspaceB.SourceRowCount != 1 {
+		if workspaceB.RowCount != 1 || workspaceB.Rows[0].Measures["total"] != "999.99" || workspaceB.SourceRowCount != -1 {
 			t.Fatalf("workspace-b summary=%#v", workspaceB)
 		}
 		_, err = application.Queries().Summary(t.Context(), reportmodel.ReportSummaryRequest{ReportKey: "sales-summary"}, integrationAuthority("workspace-a-action-only"))
@@ -786,7 +784,7 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if job.ID == "" || job.Status != "queued" || job.Scope.QueryKey != "paid" || len(job.Scope.MetricDefinitions) != 2 {
+		if job.ID == "" || job.Status != "queued" || job.Scope.Parameters["status"] != "paid" {
 			t.Fatalf("export job=%#v", job)
 		}
 		workerRequest := reportmodel.ReportExportExecutionRequest{ReportKey: request.ReportKey, ObjectKey: request.ObjectKey, Scope: job.Scope, Page: reportmodel.ReportPageRequest{PageSize: 1}}
@@ -798,7 +796,7 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if page.RowCount != 1 || !page.Truncated || page.Rows[0].Measures["total"] != "0.30" || len(page.Analyses) != 0 {
+		if page.RowCount != 1 || !page.Truncated || page.Rows[0].Measures["total"] != "0.30" {
 			t.Fatalf("export page=%#v", page)
 		}
 		_, err = application.Exports().Prepare(t.Context(), integrationExportRequest("denied-action"), integrationAuthority("workspace-a-read-only"))
@@ -866,8 +864,8 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 		}
 	})
 
-	if host.datasetReads.Load() == 0 || host.objectSQLExecutions.Load() == 0 {
-		t.Fatalf("real host adapters were not exercised: dataset=%d object_sql=%d", host.datasetReads.Load(), host.objectSQLExecutions.Load())
+	if host.objectSQLExecutions.Load() == 0 {
+		t.Fatal("real Object SQL host adapter was not exercised")
 	}
 }
 

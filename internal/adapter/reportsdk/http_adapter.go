@@ -174,7 +174,7 @@ func (s *reportHTTPAdapter) summary(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.binding.Queries().Summary(r.Context(), reportmodel.ReportSummaryRequest{
 		ReportKey: strings.TrimSpace(r.PathValue("reportKey")), Mode: strings.TrimSpace(r.URL.Query().Get("mode")),
-		QueryKey: strings.TrimSpace(r.URL.Query().Get("query_key")), Tags: append([]string(nil), r.URL.Query()["tags"]...), Page: page,
+		Page: page,
 	}, reportAuthority(r))
 	if err != nil {
 		writeReportError(w, err)
