@@ -153,4 +153,4 @@ func reportConfigInt(config map[string]any, key string) int {
 	}
 }
 
-var _ modulehttp.Surface = (*reportHTTPSurface)(nil)
+var _ modulehttp.Adapter = (*reportHTTPAdapter)(nil)

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/domainry/domainry-foundation/apperror"
 	reportsdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
 	"github.com/domainry/domainry-report-sdk/modulehost"
@@ -732,6 +733,10 @@ func objectSQLApplicationError(err error) error {
 	var planErr *reportmodel.ReportObjectSQLPlanError
 	if errors.As(err, &planErr) {
 		return &reportsdk.Error{StatusCode: 400, Code: planErr.Code, Params: planErr.Params, Cause: planErr}
+	}
+	var applicationErr *apperror.AppError
+	if errors.As(err, &applicationErr) && strings.TrimSpace(applicationErr.Code) != "" {
+		return &reportsdk.Error{StatusCode: 400, Code: applicationErr.Code, Params: applicationErr.Params, Cause: applicationErr}
 	}
 	return reportError(400, "backend.report.object_sql_invalid", err)
 }

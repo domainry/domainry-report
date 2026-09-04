@@ -1,0 +1,88 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: domainry-report
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: domainry-report
+      # Protocol v3 and its shared contract dependencies are committed but do
+      # not yet have compatible module tags. Keep this temporary source
+      # workspace deterministic until the release blocker is removed.
+      - uses: actions/checkout@v4
+        with:
+          repository: domainry/domainry-report-sdk
+          ref: 44d9129fbfeeb2f2a53f8e92c21513a05f2d52a3
+          path: domainry-report-sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: domainry/domainry-foundation
+          ref: ddc3e594ee393dd91c91ad466cfec3dcf3d4d960
+          path: domainry-foundation
+      - uses: actions/checkout@v4
+        with:
+          repository: domainry/domainry-identity-sdk
+          ref: 51348ff00e2fbef482af6346baef04ed32b7de61
+          path: domainry-identity-sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: domainry/domainry-notification-sdk
+          ref: c4aa3c035b3ef32f4d46deab50eb3c51e6198fee
+          path: domainry-notification-sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: domainry/domainry-orm
+          ref: 83199ada4809fdcf42bbcaca268a517c7a3c8ee2
+          path: domainry-orm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.6"
+          cache: true
+          cache-dependency-path: |
+            domainry-report/go.sum
+            domainry-report-sdk/go.sum
+            domainry-foundation/go.sum
+            domainry-identity-sdk/go.sum
+            domainry-notification-sdk/go.sum
+            domainry-orm/go.sum
+      - name: Compose protocol-v3 SDK workspace
+        run: >-
+          go work init .
+          ../domainry-report-sdk
+          ../domainry-foundation
+          ../domainry-identity-sdk
+          ../domainry-notification-sdk
+          ../domainry-orm
+      - name: Check Go formatting
+        run: |
+          unformatted="$(find . -name '*.go' -not -path './.git/*' -print0 | xargs -0 gofmt -l)"
+          if [ -n "${unformatted}" ]; then
+            printf 'gofmt required:\n%s\n' "${unformatted}"
+            exit 1
+          fi
+      - name: Test all Report packages
+        run: go test ./...
+      - name: Database integration gate
+        run: >-
+          go test -count=1 -v
+          ./module
+          ./internal/infrastructure/persistence/database/...
+          -run 'TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle|TestSnapshotStoreOwnsIdempotencyFencingAndScope|TestReportOwnsAllDefinitionAndSnapshotTablesAcrossDialects'
+      - name: Race-check application and persistence boundaries
+        run: >-
+          go test -race
+          ./module
+          ./internal/application/report
+          ./internal/infrastructure/persistence/database/report

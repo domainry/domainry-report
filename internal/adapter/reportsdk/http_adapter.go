@@ -16,21 +16,21 @@ import (
 	reportapplication "github.com/domainry/domainry-report/internal/application/report"
 )
 
-type reportHTTPSurface struct {
+type reportHTTPAdapter struct {
 	binding    *Binding
 	handler    http.Handler
 	routes     []modulehttp.Route
 	operations map[string]map[string]any
 }
 
-func newReportHTTPSurface(binding *Binding) (*reportHTTPSurface, error) {
+func newReportHTTPAdapter(binding *Binding) (*reportHTTPAdapter, error) {
 	routes, operations, err := reportHTTPContract()
 	if err != nil {
 		return nil, err
 	}
-	surface := &reportHTTPSurface{binding: binding, routes: routes, operations: operations}
+	adapter := &reportHTTPAdapter{binding: binding, routes: routes, operations: operations}
 	mux := http.NewServeMux()
-	handlers := surface.handlers()
+	handlers := adapter.handlers()
 	for _, route := range routes {
 		key := strings.TrimSpace(route.Action.Key)
 		handler, found := handlers[key]
@@ -48,20 +48,20 @@ func newReportHTTPSurface(binding *Binding) (*reportHTTPSurface, error) {
 		sort.Strings(keys)
 		return nil, fmt.Errorf("Report handlers have no Action manifest entries: %v", keys)
 	}
-	surface.handler = mux
-	return surface, nil
+	adapter.handler = mux
+	return adapter, nil
 }
 
-func (*reportHTTPSurface) ContractVersion() string { return modulehttp.ContractVersion }
-func (*reportHTTPSurface) Owner() string           { return "report" }
-func (*reportHTTPSurface) Name() string            { return "business" }
-func (s *reportHTTPSurface) Handler() http.Handler { return s.handler }
+func (*reportHTTPAdapter) ContractVersion() string { return modulehttp.ContractVersion }
+func (*reportHTTPAdapter) Owner() string           { return "report" }
+func (*reportHTTPAdapter) Name() string            { return "business" }
+func (s *reportHTTPAdapter) Handler() http.Handler { return s.handler }
 
-func (s *reportHTTPSurface) Routes() []modulehttp.Route {
+func (s *reportHTTPAdapter) Routes() []modulehttp.Route {
 	return append([]modulehttp.Route(nil), s.routes...)
 }
 
-func (s *reportHTTPSurface) OpenAPIOperations() map[string]map[string]any {
+func (s *reportHTTPAdapter) OpenAPIOperations() map[string]map[string]any {
 	return s.operations
 }
 
@@ -134,7 +134,7 @@ func reportOpenAPIOperationsByAction() map[string]map[string]any {
 	}
 }
 
-func (s *reportHTTPSurface) handlers() map[string]http.HandlerFunc {
+func (s *reportHTTPAdapter) handlers() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
 		sdk.ActionReportSummaryGet:       s.summary,
 		sdk.ActionReportQueryExecute:     s.queryObjectSQL,
@@ -160,13 +160,13 @@ func jsonRequestBody(schema map[string]any) map[string]any {
 	return map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": schema}}}
 }
 
-func (b *Binding) HTTPSurfaces() []modulehttp.Surface {
+func (b *Binding) HTTPAdapters() []modulehttp.Adapter {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return append([]modulehttp.Surface(nil), b.surfaces...)
+	return append([]modulehttp.Adapter(nil), b.adapters...)
 }
 
-func (s *reportHTTPSurface) summary(w http.ResponseWriter, r *http.Request) {
+func (s *reportHTTPAdapter) summary(w http.ResponseWriter, r *http.Request) {
 	page, err := reportPageRequest(r)
 	if err != nil {
 		writeReportError(w, err)
@@ -183,7 +183,7 @@ func (s *reportHTTPSurface) summary(w http.ResponseWriter, r *http.Request) {
 	writeReportJSON(w, http.StatusOK, result)
 }
 
-func (s *reportHTTPSurface) queryObjectSQL(w http.ResponseWriter, r *http.Request) {
+func (s *reportHTTPAdapter) queryObjectSQL(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Parameters map[string]any `json:"parameters"`
 		PageSize   int            `json:"page_size,omitempty"`
@@ -204,7 +204,7 @@ func (s *reportHTTPSurface) queryObjectSQL(w http.ResponseWriter, r *http.Reques
 	writeReportJSON(w, http.StatusOK, result)
 }
 
-func (s *reportHTTPSurface) refreshSnapshot(w http.ResponseWriter, r *http.Request) {
+func (s *reportHTTPAdapter) refreshSnapshot(w http.ResponseWriter, r *http.Request) {
 	result, err := s.binding.SnapshotCommands().Refresh(r.Context(), reportmodel.ReportSnapshotRefreshRequest{ReportKey: strings.TrimSpace(r.PathValue("reportKey")), IdempotencyKey: strings.TrimSpace(r.Header.Get("Idempotency-Key"))}, reportAuthority(r))
 	if err != nil {
 		writeReportError(w, err)
@@ -213,7 +213,7 @@ func (s *reportHTTPSurface) refreshSnapshot(w http.ResponseWriter, r *http.Reque
 	writeReportJSON(w, http.StatusOK, result)
 }
 
-func (s *reportHTTPSurface) prepareExport(w http.ResponseWriter, r *http.Request) {
+func (s *reportHTTPAdapter) prepareExport(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		AuditID string                               `json:"audit_id"`
 		Scope   reportmodel.ReportExportScopeRequest `json:"scope"`
@@ -241,7 +241,7 @@ func reportAuthority(r *http.Request) reportmodel.ReportAuthority {
 		token = parts[1]
 	}
 	return reportmodel.ReportAuthority{
-		AccessToken: token, Surface: "business_workspace", RequestID: strings.TrimSpace(r.Header.Get("X-Request-ID")),
+		AccessToken: token, RequestID: strings.TrimSpace(r.Header.Get("X-Request-ID")),
 		BusinessProfileKey: strings.TrimSpace(r.Header.Get("X-Business-Profile-Key")), BusinessProfileID: strings.TrimSpace(r.Header.Get("X-Business-Profile-ID")),
 	}
 }
@@ -302,6 +302,6 @@ func writeReportError(w http.ResponseWriter, err error) {
 	writeReportJSON(w, status, payload)
 }
 
-var _ modulehttp.Surface = (*reportHTTPSurface)(nil)
-var _ modulehttp.OpenAPIProvider = (*reportHTTPSurface)(nil)
+var _ modulehttp.Adapter = (*reportHTTPAdapter)(nil)
+var _ modulehttp.OpenAPIProvider = (*reportHTTPAdapter)(nil)
 var _ modulehttp.Provider = (*Binding)(nil)

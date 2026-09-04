@@ -20,7 +20,7 @@ type Binding struct {
 	queries    sdk.Queries
 	snapshots  sdk.SnapshotCommands
 	exports    sdk.Exports
-	surfaces   []modulehttp.Surface
+	adapters   []modulehttp.Adapter
 	capability modulecapability.Binding
 }
 
@@ -43,7 +43,7 @@ func (b *Binding) ValidateCapabilityCandidate(ctx context.Context, request modul
 
 func (*Binding) Descriptor() sdk.Descriptor {
 	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV3, Mode: sdk.DeploymentModeModule, Capabilities: []string{
-		sdk.CapabilityDefinitionsSync, sdk.CapabilityQueriesExecute, sdk.CapabilitySnapshotsManage, sdk.CapabilityExportsManage, sdk.CapabilityHTTPSurface,
+		sdk.CapabilityDefinitionsSync, sdk.CapabilityQueriesExecute, sdk.CapabilitySnapshotsManage, sdk.CapabilityExportsManage, sdk.CapabilityHTTPAdapter,
 	}}
 }
 
@@ -68,15 +68,15 @@ func (b *Binding) BindApplicationHost(host modulehost.ApplicationHost) error {
 	queries := reportapplication.NewQueryService(host, definitions, b.service.Snapshots())
 	snapshots := reportapplication.NewSnapshotService(queries, b.service.Snapshots(), host.ReportSnapshotTerminals(), host.ReportClock())
 	exports := reportapplication.NewExportService(queries, definitions, host.ReportExportAuthorization(), host.ReportExports())
-	surface, err := newReportHTTPSurface(b)
+	adapter, err := newReportHTTPAdapter(b)
 	if err != nil {
-		return fmt.Errorf("build Report HTTP surface: %w", err)
+		return fmt.Errorf("build Report HTTP adapter: %w", err)
 	}
 	b.mu.Lock()
 	b.queries = queries
 	b.snapshots = snapshots
 	b.exports = exports
-	b.surfaces = []modulehttp.Surface{surface}
+	b.adapters = []modulehttp.Adapter{adapter}
 	b.mu.Unlock()
 	return nil
 }

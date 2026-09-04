@@ -52,18 +52,20 @@ func (*reportHTTPExports) SourceVersion(context.Context, reportmodel.ReportExpor
 	return reportmodel.ReportSnapshotSourceVersion{}, nil
 }
 
-func TestReportHTTPSurfaceOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
-	surface, err := newReportHTTPSurface(&Binding{})
+// This is an embedded Adapter mapping contract. It deliberately does not
+// claim a networked Remote binding or SaaS end-to-end execution path.
+func TestReportHTTPAdapterOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
+	adapter, err := newReportHTTPAdapter(&Binding{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantPatterns := []string{
-		"GET /reports/{reportKey}/summary",
-		"POST /reports/{reportKey}/query",
-		"POST /reports/{reportKey}/snapshots/refresh",
-		"POST /reports/{reportKey}/exports/{objectKey}/prepare",
+		"GET /report/{reportKey}/summary",
+		"POST /report/{reportKey}/query",
+		"POST /report/{reportKey}/snapshots/refresh",
+		"POST /report/{reportKey}/exports/{objectKey}/prepare",
 	}
-	routes := surface.Routes()
+	routes := adapter.Routes()
 	if len(routes) != len(wantPatterns) {
 		t.Fatalf("routes=%d want=%d", len(routes), len(wantPatterns))
 	}
@@ -81,7 +83,7 @@ func TestReportHTTPSurfaceOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
 	if governance := routes[3].Action; governance.EffectClass != "write" || !reflect.DeepEqual(governance.ApprovalPolicies, []actioncontract.ApprovalPolicy{actioncontract.ApprovalConfirmation}) || governance.IdempotencyDecision != "caller_key_required" {
 		t.Fatalf("export prepare governance=%#v", governance)
 	}
-	operations := surface.OpenAPIOperations()
+	operations := adapter.OpenAPIOperations()
 	if len(operations) != len(wantPatterns) {
 		t.Fatalf("OpenAPI operations=%d want=%d", len(operations), len(wantPatterns))
 	}
@@ -114,21 +116,21 @@ func TestReportHTTPSurfaceOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
 	}
 }
 
-func TestReportHTTPSurfaceRejectsTrailingJSONAndForwardsCallerProof(t *testing.T) {
+func TestReportHTTPAdapterRejectsTrailingJSONAndForwardsCallerProof(t *testing.T) {
 	queries, exports := &reportHTTPQueries{}, &reportHTTPExports{}
 	binding := &Binding{queries: queries, snapshots: reportHTTPSnapshots{}, exports: exports}
-	surface, err := newReportHTTPSurface(binding)
+	adapter, err := newReportHTTPAdapter(binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := surface.Handler()
+	handler := adapter.Handler()
 
 	for name, body := range map[string]string{
 		"trailing value": `{"parameters":{}} {}`,
 		"unknown field":  `{"parameters":{},"sql":"SELECT 1"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, "/reports/sales/query", strings.NewReader(body))
+			request := httptest.NewRequest(http.MethodPost, "/report/sales/query", strings.NewReader(body))
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
 			if response.Code != http.StatusBadRequest {
@@ -137,7 +139,7 @@ func TestReportHTTPSurfaceRejectsTrailingJSONAndForwardsCallerProof(t *testing.T
 		})
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/reports/sales/query", strings.NewReader(`{"parameters":{"region":"west"},"page_size":25}`))
+	request := httptest.NewRequest(http.MethodPost, "/report/sales/query", strings.NewReader(`{"parameters":{"region":"west"},"page_size":25}`))
 	request.Header.Set("Authorization", "Bearer report-token")
 	request.Header.Set("X-Request-ID", "request-1")
 	response := httptest.NewRecorder()
@@ -152,7 +154,7 @@ func TestReportHTTPSurfaceRejectsTrailingJSONAndForwardsCallerProof(t *testing.T
 		t.Fatalf("query authority=%#v", queries.authority)
 	}
 
-	request = httptest.NewRequest(http.MethodPost, "/reports/sales/exports/order/prepare", strings.NewReader(`{"audit_id":"audit-1","scope":{"purpose":"test","freshness":{"mode":"realtime"}}}`))
+	request = httptest.NewRequest(http.MethodPost, "/report/sales/exports/order/prepare", strings.NewReader(`{"audit_id":"audit-1","scope":{"purpose":"test","freshness":{"mode":"realtime"}}}`))
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted || response.Header().Get("Location") != "/data-exchange/jobs/job-1?provider=reports&operation=export" {
