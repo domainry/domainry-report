@@ -3,11 +3,11 @@ module github.com/domainry/domainry-report
 go 1.26.0
 
 require (
-	github.com/domainry/domainry-foundation v0.1.0-dev.8.0.20260903120224-ddc3e594ee39
-	github.com/domainry/domainry-identity-sdk v0.1.1-dev7.0.20260903120225-51348ff00e2f
-	github.com/domainry/domainry-notification-sdk v0.1.0-dev.7.0.20260903120225-c4aa3c035b3e
-	github.com/domainry/domainry-orm v0.1.29
-	github.com/domainry/domainry-report-sdk v0.1.2-0.20260903120226-44d9129fbfee
+	github.com/domainry/domainry-foundation v0.1.0-dev.9
+	github.com/domainry/domainry-identity-sdk v0.1.1-dev8
+	github.com/domainry/domainry-notification-sdk v0.1.0-dev.8
+	github.com/domainry/domainry-orm v0.1.30
+	github.com/domainry/domainry-report-sdk v0.1.2
 	github.com/shopspring/decimal v1.4.0
 	modernc.org/sqlite v1.57.0
 )
