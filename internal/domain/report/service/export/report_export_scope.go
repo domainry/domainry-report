@@ -15,20 +15,19 @@ import (
 type Authorization interface {
 	AuthorizeReportExportSource(context.Context, string) error
 	AuthorizeReportExportField(context.Context, string, string) (bool, error)
-	AuthorizeReportObjectSQLExport(context.Context, reportmodel.ReportSchema) error
 }
 
 // NormalizeScope binds only declared object_sql_v1 parameters and result
 // columns. A request can narrow a published definition but cannot introduce
 // SQL, source objects, fields, filters, or joins.
-func NormalizeScope(ctx context.Context, report reportmodel.ReportSchema, objectKey string, control reportmodel.ReportExportControlSchema, request reportmodel.ReportExportScopeRequest, authorization Authorization) (reportmodel.ReportExportScopeRequest, reportmodel.ReportSchema, map[string]bool, error) {
+func NormalizeScope(ctx context.Context, report reportmodel.ReportSchema, plan reportmodel.ReportObjectSQLPlan, objectKey string, control reportmodel.ReportExportControlSchema, request reportmodel.ReportExportScopeRequest, authorization Authorization) (reportmodel.ReportExportScopeRequest, reportmodel.ReportSchema, map[string]bool, error) {
 	scope := request
 	scope.Purpose = strings.TrimSpace(scope.Purpose)
 	if scope.Purpose == "" || len(scope.Purpose) > 512 || report.ObjectSQLV1 == nil {
 		return scope, report, nil, exportScopeError("backend.report.export_scope_invalid")
 	}
-	for _, sourceObject := range reportmodel.ReportObjectSQLObjectKeys(report.ObjectSQLV1) {
-		if !reportExportControlOwnsSource(control, sourceObject) {
+	for _, source := range plan.Sources {
+		if !reportExportControlOwnsSource(control, source.ObjectKey) {
 			return scope, report, nil, exportScopeError("backend.report.export_control_invalid")
 		}
 	}
@@ -45,8 +44,8 @@ func NormalizeScope(ctx context.Context, report reportmodel.ReportSchema, object
 	}
 	scope.Parameters = parameters
 
-	allowedColumns := make(map[string]bool, len(report.ObjectSQLV1.ResultSchema))
-	for _, column := range report.ObjectSQLV1.ResultSchema {
+	allowedColumns := make(map[string]bool, len(plan.ResultSchema))
+	for _, column := range plan.ResultSchema {
 		allowedColumns[column.Key] = true
 		if len(request.FieldProjection) == 0 {
 			scope.FieldProjection = append(scope.FieldProjection, column.Key)
@@ -74,11 +73,22 @@ func NormalizeScope(ctx context.Context, report reportmodel.ReportSchema, object
 	return scope, report, map[string]bool{}, nil
 }
 
-func ValidateFieldAccess(ctx context.Context, report reportmodel.ReportSchema, _ reportmodel.ReportExportControlSchema, authorization Authorization) error {
+func ValidateFieldAccess(ctx context.Context, plan reportmodel.ReportObjectSQLPlan, authorization Authorization) error {
 	if authorization == nil {
 		return &apperror.AppError{Kind: apperror.KindInternal, Code: "backend.report.export_authorizer_unavailable"}
 	}
-	return authorization.AuthorizeReportObjectSQLExport(ctx, report)
+	for _, source := range plan.Sources {
+		for _, fieldKey := range source.Fields {
+			masked, err := authorization.AuthorizeReportExportField(ctx, source.ObjectKey, fieldKey)
+			if err != nil {
+				return err
+			}
+			if masked {
+				return &apperror.AppError{Kind: apperror.KindForbidden, Code: "backend.report.export_sensitive_measure_denied"}
+			}
+		}
+	}
+	return nil
 }
 
 func reportExportControlOwnsSource(control reportmodel.ReportExportControlSchema, objectKey string) bool {

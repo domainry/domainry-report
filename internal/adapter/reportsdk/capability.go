@@ -65,11 +65,11 @@ func NewCapabilityBinding(validator modulecapability.Validator) (*modulecapabili
 	if err != nil {
 		return nil, err
 	}
-	resultSchemaContract, err := reportObjectSQLResultSchemaAuthoringContract()
+	objectSQLContract, err := reportObjectSQLAuthoringContract()
 	if err != nil {
 		return nil, err
 	}
-	document.Projections = append(document.Projections, resultSchemaContract)
+	document.Projections = append(document.Projections, objectSQLContract)
 	document.ValidationContracts = []modulecapability.ValidationScopeContract{{
 		Kind: "report.definition", Description: "Validate one project report definition against Report's object_sql_v1 contract.",
 		Coverage: modulecapability.ValidationCoverageAllCandidates, CandidateCollections: []string{"reports"}, ReferencedCollections: []string{"objects"},
@@ -129,7 +129,10 @@ func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.V
 				}
 				fields := make([]reportquery.Field, 0, len(source.Fields))
 				for _, field := range source.Fields {
-					fields = append(fields, reportquery.Field{Key: field.Key, Type: field.Type, Precision: reportConfigInt(field.Config, "precision"), Scale: int32(reportConfigInt(field.Config, "scale"))})
+					fields = append(fields, reportquery.Field{
+						Key: field.Key, Type: field.Type, Precision: reportConfigInt(field.Config, "precision"), Scale: int32(reportConfigInt(field.Config, "scale")), Unique: field.Unique,
+						RelationTarget: reportRelationTarget(field), RelationCardinality: reportRelationCardinality(field),
+					})
 				}
 				objects[source.Key] = reportquery.Object{Key: source.Key, Fields: fields}
 			}
@@ -155,9 +158,9 @@ func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.V
 	return result, nil
 }
 
-func reportObjectSQLResultSchemaAuthoringContract() (modulecapability.SourceProjection, error) {
+func reportObjectSQLAuthoringContract() (modulecapability.SourceProjection, error) {
 	column := map[string]any{
-		"type": "object", "additionalProperties": false, "required": []string{"type", "kind"},
+		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
 			"type":      map[string]any{"type": "string", "enum": []string{"text", "integer", "number", "decimal", "boolean", "date", "datetime", "currency"}},
 			"kind":      map[string]any{"type": "string", "enum": []string{"dimension", "measure"}},
@@ -166,19 +169,80 @@ func reportObjectSQLResultSchemaAuthoringContract() (modulecapability.SourceProj
 	}
 	payload, err := json.Marshal(map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
-		"title":   "Compact Object SQL result schema",
-		"type":    "object", "minProperties": 1, "additionalProperties": column,
-		"x-domainry-path": "reports.<report>.object_sql_v1.result_schema",
-		"x-domainry-kind-semantics": map[string]any{
-			"dimension":         "grouping, filtering, labeling, or row identity output",
-			"measure":           "aggregate, count, amount total, or other numeric result",
-			"forbidden_aliases": []string{"metric"},
+		"title":   "Compact Object SQL v1 authoring contract",
+		"type":    "object", "additionalProperties": false,
+		"oneOf": []any{map[string]any{"required": []string{"sql"}}, map[string]any{"required": []string{"sql_file"}}},
+		"properties": map[string]any{
+			"sql":      map[string]any{"type": "string", "description": "One SELECT statement over model Object keys; SQL is the structural source of truth."},
+			"sql_file": map[string]any{"type": "string", "description": "Exactly backend/reports/<report-key>.sql; Plane loads and hashes it before compilation."},
+			"parameters": map[string]any{
+				"type": "object", "description": "Optional parameters keyed by SQL placeholder name. Values use compact field DSL such as text! or datetime.",
+				"additionalProperties": map[string]any{"type": "string"},
+			},
+			"result_schema":        map[string]any{"type": "object", "description": "Optional semantic overrides keyed by SELECT alias; type/order are derived from SQL.", "additionalProperties": column},
+			"timeout_milliseconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 30000},
+			"time_zone":            map[string]any{"type": "string"},
+		},
+		"x-domainry-path": "reports.<report>.object_sql_v1",
+		"x-domainry-derived-fields": map[string]any{
+			"source_objects": "FROM/JOIN Object keys", "result_schema.key_type_order": "SELECT aliases and bound expression types", "join_cardinality": "Object relation/unique metadata",
+		},
+		"x-domainry-supported-sql": map[string]any{
+			"statement": []string{"SELECT"}, "joins": []string{"INNER JOIN ... ON", "LEFT JOIN ... ON"},
+			"clauses":    []string{"WHERE", "GROUP BY", "HAVING", "ORDER BY", "LIMIT"},
+			"aggregates": []string{"COUNT", "SUM", "AVG", "MIN", "MAX"},
+			"functions":  []string{"ROUND", "FLOOR", "COALESCE", "NULLIF", "DATE_BUCKET", "CASE"},
+			"forbidden":  []string{"SELECT *", "subqueries", "CTEs", "UNION", "window functions", "DML/DDL", "string literals"},
+		},
+		"x-domainry-identifiers": map[string]any{
+			"aliases_required": true, "qualified_fields_required": true,
+			"quoting": "Quote every model-derived Object and field identifier with MySQL backticks, even when the key is not a SQL keyword; keep aliases, parameter names, and result aliases unquoted.",
+		},
+		"x-domainry-join-proof": map[string]any{
+			"authoring": "compiler_inferred", "metadata_source": "project Object JSON field.type/config/unique", "many_to_many": "rejected", "unprovable": "rejected with candidate relation fields", "legacy_join_cardinalities": "verified assertion only",
+		},
+		"x-domainry-result-semantics": map[string]any{
+			"dimension": "default for non-aggregate expressions; optional override for business semantics",
+			"measure":   "default for aggregate expressions; optional override for business semantics", "forbidden_aliases": []string{"metric"},
+		},
+		"x-domainry-parameter-semantics": map[string]any{
+			"compact_field_dsl": true, "types": []string{"text", "integer", "number", "decimal", "boolean", "date", "datetime"},
+			"required_suffix": "!", "binding": "SQL :name must match the surrounding map key",
+		},
+		"x-domainry-limits": map[string]any{"sql_characters": 32768, "joins": 8, "columns": 64, "limit_rows": 10000, "default_limit_rows": 1000, "timeout_milliseconds": 30000},
+		"examples": []any{
+			map[string]any{"sql_file": "backend/reports/payments_by_store.sql", "parameters": map[string]any{"from_time": "datetime!"}},
+			map[string]any{"sql": "SELECT s.`store` AS store, COUNT(DISTINCT p.`id`) AS payment_count FROM `sale` s LEFT JOIN `payment` p ON p.`sale_id` = s.`id` GROUP BY s.`store` ORDER BY s.`store` LIMIT 100"},
 		},
 	})
 	if err != nil {
 		return modulecapability.SourceProjection{}, err
 	}
-	return modulecapability.SourceProjection{Kind: "report.authoring_schema", Key: "object_sql_result_schema", Payload: payload}, nil
+	return modulecapability.SourceProjection{Kind: "report.authoring_schema", Key: "object_sql_v1", Payload: payload}, nil
+}
+
+func reportRelationTarget(field reportObjectFieldAuthoringFragment) string {
+	for _, key := range []string{"target", "object_key"} {
+		if value := strings.TrimSpace(fmt.Sprint(field.Config[key])); value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	var validation struct {
+		Target string `json:"target"`
+	}
+	_ = json.Unmarshal(field.Validation, &validation)
+	return strings.TrimSpace(validation.Target)
+}
+
+func reportRelationCardinality(field reportObjectFieldAuthoringFragment) string {
+	if strings.TrimSpace(field.Type) != "relation" {
+		return ""
+	}
+	value := strings.TrimSpace(fmt.Sprint(field.Config["cardinality"]))
+	if value == "" || value == "<nil>" {
+		return "many_to_one"
+	}
+	return value
 }
 
 func reportConfigInt(config map[string]any, key string) int {

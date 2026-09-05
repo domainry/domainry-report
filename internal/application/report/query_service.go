@@ -154,9 +154,11 @@ func (s *QueryService) resolve(ctx context.Context, reportKey string, authority 
 }
 
 // reportDataPermissionKeys resolves the exact Permission set whose data
-// policies govern every source participating in one report execution. An
-// authored allowlist wins; otherwise the root source's read Permission is the
-// only implicit default. Joined sources never invent their own Permission.
+// policies govern every source participating in one report execution.
+// Published permissions are preserved and SQL's parsed source tree always
+// supplies an exact read Permission for every source. This discovery binds no
+// fields and grants nothing by itself; host authorization still checks every
+// Object.
 func reportDataPermissionKeys(report reportmodel.ReportSchema) []string {
 	seen := map[string]bool{}
 	permissions := make([]string, 0, len(report.RequiredPermissions))
@@ -168,13 +170,14 @@ func reportDataPermissionKeys(report reportmodel.ReportSchema) []string {
 		seen[permission] = true
 		permissions = append(permissions, permission)
 	}
-	if len(permissions) == 0 {
-		objectKey := ""
-		if report.ObjectSQLV1 != nil && len(report.ObjectSQLV1.SourceObjects) > 0 {
-			objectKey = strings.TrimSpace(report.ObjectSQLV1.SourceObjects[0])
-		}
-		if objectKey != "" {
-			permissions = append(permissions, objectKey+".read")
+	if report.ObjectSQLV1 != nil {
+		if objectKeys, err := reportobjectsql.DiscoverReportObjectSQLSources(report.ObjectSQLV1.SQL); err == nil {
+			for _, objectKey := range objectKeys {
+				if objectKey = strings.TrimSpace(objectKey); objectKey != "" && !seen[objectKey+".read"] {
+					seen[objectKey+".read"] = true
+					permissions = append(permissions, objectKey+".read")
+				}
+			}
 		}
 	}
 	sort.Strings(permissions)
@@ -317,7 +320,10 @@ func (s *QueryService) compileAuthorizedObjectSQL(ctx context.Context, report re
 func reportEngineObject(source reportmodel.ReportSourceObject) reportquery.Object {
 	fields := make([]reportquery.Field, 0, len(source.Fields))
 	for _, field := range source.Fields {
-		fields = append(fields, reportquery.Field{Key: field.Key, Type: field.Type, Precision: field.Precision, Scale: field.Scale})
+		fields = append(fields, reportquery.Field{
+			Key: field.Key, Type: field.Type, Precision: field.Precision, Scale: field.Scale,
+			Unique: field.Unique, RelationTarget: field.RelationTarget, RelationCardinality: field.RelationCardinality,
+		})
 	}
 	return reportquery.Object{Key: source.Key, Fields: fields}
 }

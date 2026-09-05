@@ -36,8 +36,15 @@ func TestReportCapabilityTracksOwnerRoutesAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(document.Projections) != 1 || document.Projections[0].Kind != "report.authoring_schema" || document.Projections[0].Key != "object_sql_result_schema" ||
+	if len(document.Projections) != 1 || document.Projections[0].Kind != "report.authoring_schema" || document.Projections[0].Key != "object_sql_v1" ||
 		!bytes.Contains(document.Projections[0].Payload, []byte(`"kind":{"enum":["dimension","measure"]`)) ||
+		!bytes.Contains(document.Projections[0].Payload, []byte(`"x-domainry-supported-sql"`)) ||
+		!bytes.Contains(document.Projections[0].Payload, []byte(`"oneOf":[{"required":["sql"]},{"required":["sql_file"]}]`)) ||
+		!bytes.Contains(document.Projections[0].Payload, []byte(`"from_time":"datetime!"`)) ||
+		!bytes.Contains(document.Projections[0].Payload, []byte(`Quote every model-derived Object and field identifier with MySQL backticks`)) ||
+		!bytes.Contains(document.Projections[0].Payload, []byte("FROM `sale` s LEFT JOIN `payment` p")) ||
+		bytes.Contains(document.Projections[0].Payload, []byte("FROM sale s")) ||
+		!bytes.Contains(document.Projections[0].Payload, []byte(`"legacy_join_cardinalities":"verified assertion only"`)) ||
 		bytes.Contains(document.Projections[0].Payload, []byte(`"enum":["dimension","measure","metric"]`)) {
 		t.Fatalf("Report Object SQL authoring projection=%+v", document.Projections)
 	}
@@ -71,7 +78,7 @@ func TestReportCapabilityPreservesObjectSQLResultKindDiagnostic(t *testing.T) {
 		ContractSHA256: summary.Identity.ContractSHA256, Kind: "report.definition",
 		Candidate: modulecapability.AuthoringFragment{Collection: "reports", Key: "sale_total", Value: json.RawMessage(`{
             "key":"sale_total","name":"Sale total","object_sql_v1":{
-              "sql":"SELECT s.amount AS estimated_amount FROM sale s LIMIT 10","source_objects":["sale"],
+			  "sql":"SELECT s.\u0060amount\u0060 AS estimated_amount FROM \u0060sale\u0060 s LIMIT 10",
               "result_schema":[{"key":"estimated_amount","type":"currency","kind":"metric","precision":19,"scale":2}]
             }}`)},
 		ReferencedContext: []modulecapability.AuthoringFragment{{Collection: "objects", Key: "sale", Value: json.RawMessage(`{
@@ -89,5 +96,21 @@ func TestReportCapabilityPreservesObjectSQLResultKindDiagnostic(t *testing.T) {
 		diagnostic.Params["result_key"] != "estimated_amount" || diagnostic.Params["actual"] != "metric" ||
 		diagnostic.Params["allowed_values"] != "dimension,measure" || diagnostic.Params["replacement_value"] != "measure" {
 		t.Fatalf("Report kind diagnostic=%+v", diagnostic)
+	}
+}
+
+func TestReportCapabilityAcceptsSQLOnlyStructureBoundToObjectJSONRelations(t *testing.T) {
+	request := modulecapability.ValidationRequest{
+		ContractVersion: modulecapability.ValidationContractVersion, ModuleKey: "report", CategoryKey: reportBusinessCategory, Kind: "report.definition",
+		Candidate: modulecapability.AuthoringFragment{Collection: "reports", Key: "payments", Value: json.RawMessage(`{
+            "key":"payments","object_sql_v1":{"sql":"SELECT s.\u0060store\u0060 AS store, COUNT(DISTINCT p.\u0060id\u0060) AS payment_count FROM \u0060sale\u0060 s LEFT JOIN \u0060payment\u0060 p ON p.\u0060sale_id\u0060 = s.\u0060id\u0060 GROUP BY s.\u0060store\u0060 ORDER BY s.\u0060store\u0060 LIMIT 100"}}`)},
+		ReferencedContext: []modulecapability.AuthoringFragment{
+			{Collection: "objects", Key: "sale", Value: json.RawMessage(`{"key":"sale","name":"Sale","description":"Sale","fields":[{"key":"store","name":"Store","type":"text","config":{},"required":true}]}`)},
+			{Collection: "objects", Key: "payment", Value: json.RawMessage(`{"key":"payment","name":"Payment","description":"Payment","fields":[{"key":"sale_id","name":"Sale","type":"relation","config":{"target":"sale","cardinality":"many_to_one"},"required":true}]}`)},
+		},
+	}
+	result, err := ValidateCapabilityCandidate(t.Context(), request)
+	if err != nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("diagnostics=%+v err=%v", result.Diagnostics, err)
 	}
 }

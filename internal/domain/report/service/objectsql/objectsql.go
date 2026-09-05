@@ -7,6 +7,7 @@ var NormalizeDeclaredParameters = sdkobjectsql.NormalizeDeclaredParameters
 var SafeCrossWorkspaceAggregatePlan = sdkobjectsql.SafeCrossWorkspaceAggregatePlan
 var ExpressionHasAggregate = sdkobjectsql.ExpressionHasAggregate
 var CompileReportObjectSQL = sdkobjectsql.CompileReportObjectSQL
+var DiscoverReportObjectSQLSources = sdkobjectsql.DiscoverReportObjectSQLSources
 var ReportObjectSQLPlanSingleRow = sdkobjectsql.ReportObjectSQLPlanSingleRow
 
 const (

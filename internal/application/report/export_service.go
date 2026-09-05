@@ -10,6 +10,7 @@ import (
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
 	"github.com/domainry/domainry-report-sdk/modulehost"
 	reportexport "github.com/domainry/domainry-report/internal/domain/report/service/export"
+	reportobjectsql "github.com/domainry/domainry-report/internal/domain/report/service/objectsql"
 )
 
 type ExportService struct {
@@ -96,12 +97,17 @@ func (s *ExportService) resolveExecution(ctx context.Context, request reportmode
 	}
 	exportPermission := reportExportDataPermission(request.ObjectKey)
 	authorization := exportAuthorization{service: s, subject: subject, dataPermissions: []string{exportPermission}}
-	normalized, scoped, _, err := reportexport.NormalizeScope(ctx, definition.Report, request.ObjectKey, definition.Control, request.Scope, authorization)
+	scoped := reportForDataPermissions(definition.Report, authorization.dataPermissions)
+	plan, err := s.queries.compileAuthorizedObjectSQL(ctx, scoped, subject)
+	if err != nil {
+		return reportmodel.ReportSubject{}, reportmodel.ReportExportExecution{}, reportmodel.ReportSchema{}, err
+	}
+	normalized, scoped, _, err := reportexport.NormalizeScope(ctx, scoped, plan, request.ObjectKey, definition.Control, request.Scope, authorization)
 	if err != nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportExecution{}, reportmodel.ReportSchema{}, exportApplicationError(err)
 	}
 	scoped = reportForDataPermissions(scoped, authorization.dataPermissions)
-	if err := reportexport.ValidateFieldAccess(ctx, scoped, definition.Control, authorization); err != nil {
+	if err := reportexport.ValidateFieldAccess(ctx, plan, authorization); err != nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportExecution{}, reportmodel.ReportSchema{}, exportApplicationError(err)
 	}
 	resolved := reportmodel.ReportExportExecution{Definition: definition, Scope: normalized}
@@ -128,26 +134,6 @@ func (a exportAuthorization) AuthorizeReportExportField(ctx context.Context, obj
 		return false, normalizeHostError(err, "backend.report.export_field_authorization_failed")
 	}
 	return masked, nil
-}
-
-func (a exportAuthorization) AuthorizeReportObjectSQLExport(ctx context.Context, report reportmodel.ReportSchema) error {
-	report = reportForDataPermissions(report, a.dataPermissions)
-	plan, err := a.service.queries.compileAuthorizedObjectSQL(ctx, report, a.subject)
-	if err != nil {
-		return err
-	}
-	for _, source := range plan.Sources {
-		for _, fieldKey := range source.Fields {
-			masked, err := a.AuthorizeReportExportField(ctx, source.ObjectKey, fieldKey)
-			if err != nil {
-				return err
-			}
-			if masked {
-				return reportError(403, "backend.report.export_sensitive_measure_denied", nil)
-			}
-		}
-	}
-	return nil
 }
 
 func exportApplicationError(err error) error {
@@ -207,7 +193,14 @@ func reportExportDataPermission(objectKey string) string {
 
 func reportIncludesExportObject(report reportmodel.ReportSchema, objectKey string) bool {
 	objectKey = strings.TrimSpace(objectKey)
-	for _, candidate := range reportmodel.ReportObjectSQLObjectKeys(report.ObjectSQLV1) {
+	if report.ObjectSQLV1 == nil {
+		return false
+	}
+	candidates, err := reportobjectsql.DiscoverReportObjectSQLSources(report.ObjectSQLV1.SQL)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range candidates {
 		if strings.TrimSpace(candidate) == objectKey && objectKey != "" {
 			return true
 		}
