@@ -65,6 +65,11 @@ func NewCapabilityBinding(validator modulecapability.Validator) (*modulecapabili
 	if err != nil {
 		return nil, err
 	}
+	resultSchemaContract, err := reportObjectSQLResultSchemaAuthoringContract()
+	if err != nil {
+		return nil, err
+	}
+	document.Projections = append(document.Projections, resultSchemaContract)
 	document.ValidationContracts = []modulecapability.ValidationScopeContract{{
 		Kind: "report.definition", Description: "Validate one project report definition against Report's object_sql_v1 contract.",
 		Coverage: modulecapability.ValidationCoverageAllCandidates, CandidateCollections: []string{"reports"}, ReferencedCollections: []string{"objects"},
@@ -92,13 +97,16 @@ func NewCapabilityBinding(validator modulecapability.Validator) (*modulecapabili
 
 func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
 	result := modulecapability.ValidationResult{Diagnostics: []modulecapability.Diagnostic{}}
-	invalid := func(rule, field string, err error) (modulecapability.ValidationResult, error) {
+	invalidWithParams := func(rule, field string, err error, params map[string]string) (modulecapability.ValidationResult, error) {
 		message := "Report candidate is invalid"
 		if err != nil && strings.TrimSpace(err.Error()) != "" {
 			message = err.Error()
 		}
-		result.Diagnostics = append(result.Diagnostics, modulecapability.Diagnostic{Owner: "report", RuleKey: rule, Severity: modulecapability.SeverityError, FieldPath: field, Message: message})
+		result.Diagnostics = append(result.Diagnostics, modulecapability.Diagnostic{Owner: "report", RuleKey: rule, Severity: modulecapability.SeverityError, FieldPath: field, Message: message, Params: params})
 		return result, nil
+	}
+	invalid := func(rule, field string, err error) (modulecapability.ValidationResult, error) {
+		return invalidWithParams(rule, field, err, nil)
 	}
 	switch request.Kind {
 	case "report.definition":
@@ -126,6 +134,15 @@ func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.V
 				objects[source.Key] = reportquery.Object{Key: source.Key, Fields: fields}
 			}
 			if _, err := reportobjectsql.CompileReportObjectSQL(*report.ObjectSQLV1, objects); err != nil {
+				if planErr, ok := err.(*reportmodel.ReportObjectSQLPlanError); ok {
+					params := make(map[string]string, len(planErr.Params)+2)
+					for key, value := range planErr.Params {
+						params[key] = value
+					}
+					params["cause_code"] = planErr.Code
+					params["cause_path"] = planErr.Path
+					return invalidWithParams("report.definition.object_sql_invalid", "$.candidate.value."+planErr.Path, err, params)
+				}
 				return invalid("report.definition.object_sql_invalid", "$.candidate.value.object_sql_v1", err)
 			}
 		} else {
@@ -136,6 +153,32 @@ func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.V
 	}
 	_ = ctx
 	return result, nil
+}
+
+func reportObjectSQLResultSchemaAuthoringContract() (modulecapability.SourceProjection, error) {
+	column := map[string]any{
+		"type": "object", "additionalProperties": false, "required": []string{"type", "kind"},
+		"properties": map[string]any{
+			"type":      map[string]any{"type": "string", "enum": []string{"text", "integer", "number", "decimal", "boolean", "date", "datetime", "currency"}},
+			"kind":      map[string]any{"type": "string", "enum": []string{"dimension", "measure"}},
+			"precision": map[string]any{"type": "integer"}, "scale": map[string]any{"type": "integer"},
+		},
+	}
+	payload, err := json.Marshal(map[string]any{
+		"$schema": "https://json-schema.org/draft/2020-12/schema",
+		"title":   "Compact Object SQL result schema",
+		"type":    "object", "minProperties": 1, "additionalProperties": column,
+		"x-domainry-path": "reports.<report>.object_sql_v1.result_schema",
+		"x-domainry-kind-semantics": map[string]any{
+			"dimension":         "grouping, filtering, labeling, or row identity output",
+			"measure":           "aggregate, count, amount total, or other numeric result",
+			"forbidden_aliases": []string{"metric"},
+		},
+	})
+	if err != nil {
+		return modulecapability.SourceProjection{}, err
+	}
+	return modulecapability.SourceProjection{Kind: "report.authoring_schema", Key: "object_sql_result_schema", Payload: payload}, nil
 }
 
 func reportConfigInt(config map[string]any, key string) int {
