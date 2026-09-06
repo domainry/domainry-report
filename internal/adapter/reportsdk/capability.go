@@ -17,16 +17,48 @@ import (
 const reportBusinessCategory = reportsdk.CapabilityReportBusiness
 
 type reportObjectAuthoringFragment struct {
-	Key            string                               `json:"key"`
-	Name           string                               `json:"name"`
-	Description    string                               `json:"description"`
-	I18n           json.RawMessage                      `json:"i18n,omitempty"`
-	Fields         []reportObjectFieldAuthoringFragment `json:"fields"`
-	Validations    json.RawMessage                      `json:"validations,omitempty"`
-	UX             json.RawMessage                      `json:"ux,omitempty"`
-	Config         json.RawMessage                      `json:"config,omitempty"`
-	VersionHistory json.RawMessage                      `json:"version_history,omitempty"`
-	Provenance     json.RawMessage                      `json:"provenance,omitempty"`
+	Key                   string                                    `json:"key"`
+	Name                  string                                    `json:"name"`
+	Description           string                                    `json:"description"`
+	I18n                  json.RawMessage                           `json:"i18n,omitempty"`
+	Fields                []reportObjectFieldAuthoringFragment      `json:"fields"`
+	Validations           json.RawMessage                           `json:"validations,omitempty"`
+	Capabilities          *reportObjectCapabilityContext            `json:"capabilities,omitempty"`
+	LifecyclePolicy       *reportObjectLifecyclePolicyContext       `json:"lifecycle_policy,omitempty"`
+	LedgerPolicy          *reportObjectLedgerPolicyContext          `json:"ledger_policy,omitempty"`
+	ExportAssurancePolicy *reportObjectExportAssurancePolicyContext `json:"export_assurance_policy,omitempty"`
+	UX                    json.RawMessage                           `json:"ux,omitempty"`
+	Config                json.RawMessage                           `json:"config,omitempty"`
+	VersionHistory        json.RawMessage                           `json:"version_history,omitempty"`
+	Provenance            json.RawMessage                           `json:"provenance,omitempty"`
+}
+
+// These types mirror the non-query metadata disclosed by Plane's complete
+// Object authoring fragment. Strict decoding keeps the context boundary closed
+// to unknown fields, while Report deliberately does not interpret or enforce
+// these owner-governed policies.
+type reportObjectCapabilityContext struct {
+	Create *bool `json:"create,omitempty"`
+	Read   *bool `json:"read,omitempty"`
+	Update *bool `json:"update,omitempty"`
+	Delete *bool `json:"delete,omitempty"`
+	Export *bool `json:"export,omitempty"`
+}
+
+type reportObjectLifecyclePolicyContext struct {
+	Mode            string   `json:"mode"`
+	StateField      string   `json:"state_field,omitempty"`
+	ImmutableStates []string `json:"immutable_states,omitempty"`
+}
+
+type reportObjectLedgerPolicyContext struct {
+	Integrity string `json:"integrity,omitempty"`
+	Signature string `json:"signature,omitempty"`
+}
+
+type reportObjectExportAssurancePolicyContext struct {
+	RequiredMethods           []string `json:"required_methods"`
+	RecentReauthMaxAgeSeconds int      `json:"recent_reauth_max_age_seconds,omitempty"`
 }
 
 type reportObjectFieldAuthoringFragment struct {

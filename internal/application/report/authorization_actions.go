@@ -19,7 +19,7 @@ func AuthorizationActions() ([]actioncontract.ActionDefinition, error) {
 		reportAction(reportsdk.ActionReportSummaryGet, "GET /report/{reportKey}/summary", "Get report summary", actioncontract.EffectRead, actioncontract.RiskLow, "not_applicable", "owner_read_audit_policy"),
 		reportAction(reportsdk.ActionReportQueryExecute, "POST /report/{reportKey}/query", "Execute report query", actioncontract.EffectRead, actioncontract.RiskLow, "not_applicable", "owner_read_audit_policy"),
 		reportAction(reportsdk.ActionReportSnapshotsRefresh, "POST /report/{reportKey}/snapshots/refresh", "Refresh report snapshot", actioncontract.EffectWrite, actioncontract.RiskMedium, "caller_key_required", "mutation_audit_required"),
-		reportAction(reportsdk.ActionReportExportsPrepare, "POST /report/{reportKey}/exports/{objectKey}/prepare", "Prepare report export", actioncontract.EffectWrite, actioncontract.RiskHigh, "caller_key_required", "business_export_prepare_audit", actioncontract.ApprovalConfirmation),
+		reportAction(reportsdk.ActionReportExportsPrepare, "POST /report/{reportKey}/exports/{objectKey}/prepare", "Prepare report export", actioncontract.EffectWrite, actioncontract.RiskHigh, "caller_key_required", "business_export_prepare_audit", actioncontract.ApprovalReason, actioncontract.ApprovalConfirmation),
 	}
 	result := make([]actioncontract.ActionDefinition, 0, len(definitions))
 	for _, definition := range definitions {

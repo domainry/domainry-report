@@ -58,3 +58,10 @@ not Remote E2E tests and do not establish SaaS parity. A Remote Report binding,
 service authentication/token validation boundary, independently deployed HTTP
 server, and deployment/runtime wiring do not exist in this repository today;
 those are explicit blockers for claiming embedded/Remote parity.
+
+Governed export clients should derive request prerequisites from Report's
+`report.business` capability OpenAPI. Its
+`x-domainry-operation-prerequisites` extension and standard header parameters
+are generated from the same Action manifest mounted by Runtime. Go verification
+clients can call `contract.ApplyExportPrepareHeaders` to set the stable
+idempotency key, auditable reason, and exact confirmation value together.

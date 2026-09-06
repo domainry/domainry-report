@@ -85,6 +85,9 @@ func reportHTTPContract() ([]modulehttp.Route, map[string]map[string]any, error)
 		if !found {
 			return nil, nil, fmt.Errorf("Report Action %q has no OpenAPI operation", definition.Key)
 		}
+		if err := applyReportOperationPrerequisites(operation, definition); err != nil {
+			return nil, nil, err
+		}
 		routes = append(routes, route)
 		operations[route.Pattern()] = operation
 		delete(byAction, definition.Key)
@@ -104,7 +107,6 @@ func reportOpenAPIOperationsByAction() map[string]map[string]any {
 	queryParameter := func(name string, schema map[string]any) map[string]any {
 		return map[string]any{"name": name, "in": "query", "required": false, "schema": schema}
 	}
-	idempotencyKey := map[string]any{"name": "Idempotency-Key", "in": "header", "required": true, "schema": map[string]any{"type": "string", "minLength": 1}}
 	return map[string]map[string]any{
 		sdk.ActionReportSummaryGet: {
 			"operationId": "getReportSummary", "tags": []string{"Reports"}, "summary": "Execute an authorized report summary",
@@ -123,11 +125,11 @@ func reportOpenAPIOperationsByAction() map[string]map[string]any {
 		},
 		sdk.ActionReportSnapshotsRefresh: {
 			"operationId": "refreshReportSnapshot", "tags": []string{"Reports"}, "summary": "Refresh a materialized report snapshot",
-			"security": security, "parameters": []any{reportKey, idempotencyKey}, "responses": standardOpenAPIResponses("200", "Report snapshot", reportSnapshotOpenAPISchema()),
+			"security": security, "parameters": []any{reportKey}, "responses": standardOpenAPIResponses("200", "Report snapshot", reportSnapshotOpenAPISchema()),
 		},
 		sdk.ActionReportExportsPrepare: {
 			"operationId": "prepareReportExport", "tags": []string{"Reports"}, "summary": "Prepare a governed report export",
-			"security": security, "parameters": []any{reportKey, pathParameter("objectKey"), idempotencyKey},
+			"security": security, "parameters": []any{reportKey, pathParameter("objectKey")},
 			"requestBody": jsonRequestBody(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"audit_id", "scope"}, "properties": map[string]any{"audit_id": map[string]any{"type": "string"}, "scope": reportExportScopeOpenAPISchema()}}),
 			"responses":   standardOpenAPIResponses("202", "Accepted report export job", reportExportJobOpenAPISchema()),
 		},
@@ -146,14 +148,18 @@ func (s *reportHTTPAdapter) handlers() map[string]http.HandlerFunc {
 func standardOpenAPIResponses(status, description string, schema map[string]any) map[string]any {
 	return map[string]any{
 		status: map[string]any{"description": description, "content": map[string]any{"application/json": map[string]any{"schema": schema}}},
-		"400":  map[string]any{"description": "Invalid request"}, "401": map[string]any{"description": "Authentication required"},
-		"403": map[string]any{"description": "Forbidden"}, "404": map[string]any{"description": "Report not found"}, "409": map[string]any{"description": "Report state conflict"},
+		"400":  reportOpenAPIErrorResponse("Invalid request"), "401": reportOpenAPIErrorResponse("Authentication required"),
+		"403": reportOpenAPIErrorResponse("Forbidden"), "404": reportOpenAPIErrorResponse("Report not found"), "409": reportOpenAPIErrorResponse("Report state conflict"),
 		"default": reportOpenAPIErrorResponse(),
 	}
 }
 
-func reportOpenAPIErrorResponse() map[string]any {
-	return map[string]any{"description": "Error", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Error"}}}}
+func reportOpenAPIErrorResponse(descriptions ...string) map[string]any {
+	description := "Error"
+	if len(descriptions) != 0 && strings.TrimSpace(descriptions[0]) != "" {
+		description = strings.TrimSpace(descriptions[0])
+	}
+	return map[string]any{"description": description, "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Error"}}}}
 }
 
 func jsonRequestBody(schema map[string]any) map[string]any {

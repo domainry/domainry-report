@@ -12,6 +12,7 @@ import (
 	"github.com/domainry/domainry-foundation/modulehttp"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
+	reportcontract "github.com/domainry/domainry-report/contract"
 )
 
 type reportHTTPQueries struct {
@@ -34,9 +35,12 @@ func (reportHTTPSnapshots) Refresh(context.Context, reportmodel.ReportSnapshotRe
 	return reportmodel.ReportSnapshot{}, nil
 }
 
-type reportHTTPExports struct{}
+type reportHTTPExports struct {
+	prepareRequest reportmodel.ReportExportPrepareRequest
+}
 
-func (*reportHTTPExports) Prepare(context.Context, reportmodel.ReportExportPrepareRequest, reportmodel.ReportAuthority) (reportmodel.ReportExportJob, error) {
+func (e *reportHTTPExports) Prepare(_ context.Context, request reportmodel.ReportExportPrepareRequest, _ reportmodel.ReportAuthority) (reportmodel.ReportExportJob, error) {
+	e.prepareRequest = request
 	return reportmodel.ReportExportJob{ID: "job-1"}, nil
 }
 
@@ -80,7 +84,7 @@ func TestReportHTTPAdapterOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
 	if governance := routes[1].Action; governance.EffectClass != "read" || governance.IdempotencyDecision != "not_applicable" {
 		t.Fatalf("Object SQL query governance=%#v", governance)
 	}
-	if governance := routes[3].Action; governance.EffectClass != "write" || !reflect.DeepEqual(governance.ApprovalPolicies, []actioncontract.ApprovalPolicy{actioncontract.ApprovalConfirmation}) || governance.IdempotencyDecision != "caller_key_required" {
+	if governance := routes[3].Action; governance.EffectClass != "write" || !reflect.DeepEqual(governance.ApprovalPolicies, []actioncontract.ApprovalPolicy{actioncontract.ApprovalConfirmation, actioncontract.ApprovalReason}) || governance.IdempotencyDecision != "caller_key_required" {
 		t.Fatalf("export prepare governance=%#v", governance)
 	}
 	operations := adapter.OpenAPIOperations()
@@ -103,16 +107,120 @@ func TestReportHTTPAdapterOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
 		t.Fatalf("summary total semantics=%v", semantics)
 	}
 	prepare := operations[wantPatterns[3]]
-	if !reportOpenAPIHasParameter(reportOpenAPIParameters(prepare), "Idempotency-Key") {
-		t.Fatalf("export prepare OpenAPI is missing caller idempotency key")
+	prepareParameters := reportOpenAPIParameters(prepare)
+	for _, expected := range []struct {
+		name        string
+		example     string
+		errorCode   string
+		enum        []string
+		minimumSize int
+	}{
+		{name: reportcontract.IdempotencyKeyHeader, example: sdk.ActionReportExportsPrepare + ":<stable-logical-operation-id>", errorCode: reportcontract.IdempotencyKeyRequiredErrorCode, minimumSize: 1},
+		{name: reportcontract.OperationReasonHeader, example: "Approved governed export for the stated business purpose", errorCode: reportcontract.OperationReasonRequiredErrorCode, minimumSize: 1},
+		{name: reportcontract.OperationConfirmationHeader, example: reportcontract.OperationConfirmationConfirmed, errorCode: reportcontract.OperationConfirmationRequiredErrorCode, enum: []string{reportcontract.OperationConfirmationConfirmed}},
+	} {
+		parameter := reportOpenAPIParameter(prepareParameters, expected.name)
+		if parameter == nil || parameter["in"] != "header" || parameter["required"] != true || parameter["example"] != expected.example {
+			t.Fatalf("export prepare OpenAPI header %s=%#v", expected.name, parameter)
+		}
+		headerSchema := parameter["schema"].(map[string]any)
+		if expected.minimumSize != 0 && headerSchema["minLength"] != expected.minimumSize {
+			t.Fatalf("export prepare OpenAPI header %s schema=%#v", expected.name, headerSchema)
+		}
+		if expected.enum != nil && !reflect.DeepEqual(headerSchema["enum"], expected.enum) {
+			t.Fatalf("export prepare OpenAPI header %s enum=%#v", expected.name, headerSchema["enum"])
+		}
 	}
 	responses := prepare["responses"].(map[string]any)
 	if responses["202"] == nil || responses["200"] != nil {
 		t.Fatalf("export prepare responses=%#v", responses)
 	}
+	governanceErrors := responses["400"].(map[string]any)["x-domainry-error-codes"]
+	wantGovernanceErrors := []string{
+		reportcontract.IdempotencyKeyRequiredErrorCode,
+		reportcontract.OperationConfirmationRequiredErrorCode,
+		reportcontract.OperationReasonEncodingErrorCode,
+		reportcontract.OperationReasonRequiredErrorCode,
+	}
+	if !reflect.DeepEqual(governanceErrors, wantGovernanceErrors) {
+		t.Fatalf("export prepare governance errors=%#v want=%#v", governanceErrors, wantGovernanceErrors)
+	}
+	prerequisites := prepare["x-domainry-operation-prerequisites"].(map[string]any)
+	if prerequisites["contract_version"] != reportOperationPrerequisitesContractVersion || prerequisites["action_key"] != sdk.ActionReportExportsPrepare || prerequisites["risk_level"] != string(actioncontract.RiskHigh) || !reflect.DeepEqual(prerequisites["error_codes"], wantGovernanceErrors) {
+		t.Fatalf("export prepare prerequisites=%#v", prerequisites)
+	}
+	values := prerequisites["prerequisites"].([]any)
+	if len(values) != 3 {
+		t.Fatalf("export prepare prerequisites entries=%#v", values)
+	}
+	for _, expected := range []struct {
+		header, actionField, predicate, actionValue, errorCode string
+	}{
+		{header: reportcontract.IdempotencyKeyHeader, actionField: "idempotency_decision", predicate: "equals", actionValue: "caller_key_required", errorCode: reportcontract.IdempotencyKeyRequiredErrorCode},
+		{header: reportcontract.OperationReasonHeader, actionField: "approval_policies", predicate: "contains", actionValue: string(actioncontract.ApprovalReason), errorCode: reportcontract.OperationReasonRequiredErrorCode},
+		{header: reportcontract.OperationConfirmationHeader, actionField: "approval_policies", predicate: "contains", actionValue: string(actioncontract.ApprovalConfirmation), errorCode: reportcontract.OperationConfirmationRequiredErrorCode},
+	} {
+		var found map[string]any
+		for _, raw := range values {
+			candidate := raw.(map[string]any)
+			if candidate["header"].(map[string]any)["name"] == expected.header {
+				found = candidate
+				break
+			}
+		}
+		if found == nil {
+			t.Fatalf("export prepare prerequisite %s is absent: %#v", expected.header, values)
+		}
+		condition := found["condition"].(map[string]any)
+		if condition["action_field"] != expected.actionField || condition[expected.predicate] != expected.actionValue {
+			t.Fatalf("export prepare prerequisite %s condition=%#v", expected.header, condition)
+		}
+		if !stringSliceContains(found["error_codes"].([]string), expected.errorCode) {
+			t.Fatalf("export prepare prerequisite %s errors=%#v", expected.header, found["error_codes"])
+		}
+	}
 	schema := prepare["requestBody"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
 	if !reflect.DeepEqual(schema["required"], []string{"audit_id", "scope"}) {
 		t.Fatalf("export prepare required=%#v", schema["required"])
+	}
+}
+
+func TestReportOpenAPIPrerequisitesStayAlignedWithActionMetadata(t *testing.T) {
+	routes, operations, err := reportHTTPContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range routes {
+		action := route.Action
+		parameters := reportOpenAPIParameters(operations[route.Pattern()])
+		checks := []struct {
+			name string
+			want bool
+		}{
+			{name: reportcontract.IdempotencyKeyHeader, want: action.IdempotencyDecision == "caller_key_required"},
+			{name: reportcontract.OperationReasonHeader, want: reportActionHasApprovalPolicy(action, actioncontract.ApprovalReason)},
+			{name: reportcontract.OperationConfirmationHeader, want: reportActionHasApprovalPolicy(action, actioncontract.ApprovalConfirmation)},
+		}
+		for _, check := range checks {
+			parameter := reportOpenAPIParameter(parameters, check.name)
+			if (parameter != nil) != check.want {
+				t.Fatalf("Action %s metadata/header drift for %s: want=%t parameter=%#v", action.Key, check.name, check.want, parameter)
+			}
+			if parameter != nil && (parameter["in"] != "header" || parameter["required"] != true) {
+				t.Fatalf("Action %s prerequisite %s=%#v", action.Key, check.name, parameter)
+			}
+		}
+	}
+}
+
+func TestReportOpenAPIRejectsConfirmationWithoutReasonMetadata(t *testing.T) {
+	action := actioncontract.ActionDefinition{
+		Key: "report.fixture.confirm", RiskLevel: actioncontract.RiskHigh,
+		ApprovalPolicies: []actioncontract.ApprovalPolicy{actioncontract.ApprovalConfirmation},
+	}
+	operation := map[string]any{"operationId": "confirmFixture", "responses": map[string]any{"204": map[string]any{"description": "Confirmed"}}}
+	if err := applyReportOperationPrerequisites(operation, action); err == nil {
+		t.Fatal("accepted confirmation metadata without the host-required auditable reason")
 	}
 }
 
@@ -155,10 +263,16 @@ func TestReportHTTPAdapterRejectsTrailingJSONAndForwardsCallerProof(t *testing.T
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/report/sales/exports/order/prepare", strings.NewReader(`{"audit_id":"audit-1","scope":{"purpose":"test","freshness":{"mode":"realtime"}}}`))
+	if err := reportcontract.ApplyExportPrepareHeaders(request.Header, "export:orders:request-1", "approved test export"); err != nil {
+		t.Fatal(err)
+	}
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted || response.Header().Get("Location") != "/data-exchange/jobs/job-1?provider=reports&operation=export" {
 		t.Fatalf("prepare status=%d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+	if exports.prepareRequest.IdempotencyKey != "export:orders:request-1" {
+		t.Fatalf("prepare request=%#v", exports.prepareRequest)
 	}
 }
 
@@ -174,8 +288,21 @@ func reportOpenAPIParameters(operation map[string]any) []map[string]any {
 }
 
 func reportOpenAPIHasParameter(parameters []map[string]any, name string) bool {
+	return reportOpenAPIParameter(parameters, name) != nil
+}
+
+func reportOpenAPIParameter(parameters []map[string]any, name string) map[string]any {
 	for _, parameter := range parameters {
 		if parameter["name"] == name {
+			return parameter
+		}
+	}
+	return nil
+}
+
+func stringSliceContains(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
 			return true
 		}
 	}
