@@ -62,16 +62,23 @@ type reportObjectExportAssurancePolicyContext struct {
 }
 
 type reportObjectFieldAuthoringFragment struct {
-	Key            string          `json:"key"`
-	Name           string          `json:"name"`
-	Type           string          `json:"type"`
-	I18n           json.RawMessage `json:"i18n,omitempty"`
-	Config         map[string]any  `json:"config"`
-	Validation     json.RawMessage `json:"validation,omitempty"`
-	Options        json.RawMessage `json:"options,omitempty"`
-	Required       bool            `json:"required"`
-	Unique         bool            `json:"unique,omitempty"`
-	DefaultValue   json.RawMessage `json:"default_value,omitempty"`
+	Key          string          `json:"key"`
+	Name         string          `json:"name"`
+	Type         string          `json:"type"`
+	I18n         json.RawMessage `json:"i18n,omitempty"`
+	Config       map[string]any  `json:"config"`
+	Validation   json.RawMessage `json:"validation,omitempty"`
+	Options      json.RawMessage `json:"options,omitempty"`
+	Required     bool            `json:"required"`
+	Unique       bool            `json:"unique,omitempty"`
+	DefaultValue json.RawMessage `json:"default_value,omitempty"`
+	// Upgrade and Sensitive are field-level authoring properties Plane retains on
+	// its complete Object fragment (definition-upgrade rules for required fields
+	// added to populated Objects, and the credential-derivative marker). Report
+	// neither interprets nor enforces them; naming them keeps the strict decoder
+	// from refusing an ordinary Object as an invalid report context.
+	Upgrade        json.RawMessage `json:"upgrade,omitempty"`
+	Sensitive      bool            `json:"sensitive,omitempty"`
 	VersionHistory json.RawMessage `json:"version_history,omitempty"`
 	Provenance     json.RawMessage `json:"provenance,omitempty"`
 }

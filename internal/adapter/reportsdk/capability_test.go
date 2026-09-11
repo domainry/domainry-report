@@ -270,6 +270,27 @@ func TestReportCapabilityRejectsUnknownObjectContextFields(t *testing.T) {
 	}
 }
 
+func TestReportCapabilityAcceptsFieldUpgradeRuleAndSensitiveMarker(t *testing.T) {
+	request := modulecapability.ValidationRequest{
+		ContractVersion: modulecapability.ValidationContractVersion, ModuleKey: "report", CategoryKey: reportBusinessCategory, Kind: "report.definition",
+		Candidate: modulecapability.AuthoringFragment{Collection: "reports", Key: "lead_report", Value: json.RawMessage(`{
+            "key":"lead_report","object_sql_v1":{"sql":"SELECT l.\u0060status\u0060 AS status FROM \u0060lead\u0060 l LIMIT 10"}}
+        `)},
+		ReferencedContext: []modulecapability.AuthoringFragment{{Collection: "objects", Key: "lead", Value: json.RawMessage(`{
+            "key":"lead","name":"Lead","description":"Sales lead",
+            "fields":[
+                {"key":"status","name":"Status","type":"text","config":{},"required":true},
+                {"key":"owner_ref","name":"Owner","type":"relation","config":{},"required":true,"upgrade":{"legacy":"exempt"}},
+                {"key":"pin_fingerprint","name":"PIN","type":"text","config":{},"required":false,"sensitive":true}
+            ]
+        }`)}},
+	}
+	result, err := ValidateCapabilityCandidate(t.Context(), request)
+	if err != nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("a field upgrade rule or sensitive marker must not invalidate the object context: diagnostics=%+v err=%v", result.Diagnostics, err)
+	}
+}
+
 func TestReportCapabilityLifecycleContextStillEnforcesObjectSQLFields(t *testing.T) {
 	request := modulecapability.ValidationRequest{
 		ContractVersion: modulecapability.ValidationContractVersion, ModuleKey: "report", CategoryKey: reportBusinessCategory, Kind: "report.definition",
