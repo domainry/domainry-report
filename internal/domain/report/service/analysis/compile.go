@@ -1,6 +1,6 @@
 // Package analysis owns the bounded analysis specification and arithmetic.
 // Hosts supply authorized dataset metadata and execute compiled aggregation;
-// this package never reads records, storage, principals or result pages.
+// this package never opens storage, resolves principals or fetches result pages.
 package analysis
 
 import (
@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	model "github.com/domainry/domainry-report-sdk/model"
 )
@@ -31,6 +32,7 @@ type ValueBinding struct {
 
 type Query struct {
 	Segment    string
+	Filters    []model.AnalysisFilter
 	Report     model.ReportSchema
 	Parameters map[string]any
 	Values     []ValueBinding
@@ -64,7 +66,7 @@ func Compile(request model.AnalysisRequest, dataset model.AnalysisDataset) (Plan
 	if err := d.Decode(&request); err != nil {
 		return Plan{}, invalid("request")
 	}
-	if !identifier.MatchString(dataset.Key) || dataset.Kind != "business_object" || dataset.Version == "" || len(dataset.Columns) == 0 || len(dataset.Columns) > 256 || request.DatasetKey != dataset.Key {
+	if !identifier.MatchString(dataset.Key) || (dataset.Kind != "business_object" && dataset.Kind != "table_file") || dataset.Version == "" || len(dataset.Columns) == 0 || len(dataset.Columns) > 256 || request.DatasetKey != dataset.Key || !validReferences(dataset.References) {
 		return Plan{}, invalid("dataset")
 	}
 	if request.Mode == "" {
@@ -232,7 +234,32 @@ func Compile(request model.AnalysisRequest, dataset model.AnalysisDataset) (Plan
 	if err := c.postSpecifications(); err != nil {
 		return Plan{}, err
 	}
+	if dataset.Kind == "table_file" {
+		c.plan.Methods = append(c.plan.Methods, model.AnalysisMethod{Column: "*", Method: "complete_authorized_structured_table; binary_text_comparison; typed_numeric_and_time_equality", Nulls: "source_null_preserved; empty_text_is_not_null"})
+		if request.Mode == "table" {
+			c.plan.Methods = append(c.plan.Methods, model.AnalysisMethod{Column: "*", Method: "stable_source_row_order", Nulls: "source_null_preserved"})
+		}
+	}
 	return c.plan, nil
+}
+
+func validReferences(references []model.AnalysisReference) bool {
+	if len(references) > 16 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, reference := range references {
+		text := reference.ID + reference.Label + reference.Version + reference.Subresource
+		if !map[string]bool{"business_object": true, "knowledge_document": true, "analysis_dataset": true}[reference.Kind] || strings.TrimSpace(reference.ID) == "" || len(reference.ID) > 256 || len(reference.Label) > 256 || len(reference.Version) > 256 || len(reference.Subresource) > 256 || strings.ContainsRune(text, 0) || !utf8.ValidString(text) {
+			return false
+		}
+		key := reference.Kind + "\x00" + reference.ID + "\x00" + reference.Version + "\x00" + reference.Subresource
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
 }
 
 func (c *compiler) addColumn(field model.AnalysisColumn) error {
@@ -256,7 +283,7 @@ func supportedType(t string) bool {
 func fieldSQL(key string) string { return "d.`" + key + "`" }
 
 func (c *compiler) query(segment string, filters []model.AnalysisFilter) (Query, error) {
-	q := Query{Segment: segment, Parameters: map[string]any{}}
+	q := Query{Segment: segment, Filters: filters, Parameters: map[string]any{}}
 	p := predicateBuilder{compiler: c, parameters: q.Parameters}
 	where, err := p.group(filters, "AND", 0)
 	if err != nil {
@@ -301,6 +328,9 @@ func (c *compiler) query(segment string, filters []model.AnalysisFilter) (Query,
 	if c.plan.Spec.Mode != "table" {
 		q.CountAlias = "source_count"
 		projections = append(projections, "COUNT(*) AS source_count")
+	}
+	if c.plan.Dataset.Kind == "table_file" {
+		return q, nil // Structured tables never acquire an Object SQL plan.
 	}
 	sql := "SELECT " + strings.Join(projections, ", ") + " FROM `" + c.plan.Dataset.Key + "` d"
 	if where != "" {

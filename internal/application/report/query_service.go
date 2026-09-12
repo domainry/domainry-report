@@ -26,6 +26,7 @@ type QueryService struct {
 	subjects       modulehost.SubjectResolver
 	definitions    DefinitionProvider
 	objectSQL      modulehost.ObjectSQLExecutor
+	tables         modulehost.AnalysisTableSource
 	sourceVersions modulehost.SourceVersionReader
 	audit          modulehost.ExecutionAudit
 	snapshots      reportpersistence.SnapshotRepository
@@ -48,11 +49,15 @@ func NewQueryService(host modulehost.ApplicationHost, definitions DefinitionProv
 	if clock == nil {
 		clock = time.Now
 	}
-	return &QueryService{
+	service := &QueryService{
 		subjects: host.ReportSubjects(), definitions: definitions,
 		objectSQL: host.ReportObjectSQL(), sourceVersions: host.ReportSourceVersions(), audit: host.ReportExecutionAudit(),
 		snapshots: snapshots, cursorKey: append([]byte(nil), host.ReportCursorSigningKey()...), clock: clock,
 	}
+	if tables, ok := host.(modulehost.AnalysisTableHost); ok {
+		service.tables = tables.ReportAnalysisTables()
+	}
+	return service
 }
 
 func (s *QueryService) Summary(ctx context.Context, request reportmodel.ReportSummaryRequest, authority reportmodel.ReportAuthority) (reportmodel.ReportSummary, error) {

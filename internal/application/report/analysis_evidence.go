@@ -8,6 +8,7 @@ import (
 	"time"
 
 	model "github.com/domainry/domainry-report-sdk/model"
+	"github.com/domainry/domainry-report-sdk/modulehost"
 )
 
 // AuthorizeAnalysisResult never reexecutes historical analysis. It validates
@@ -42,7 +43,8 @@ func (s analysisState) fingerprint() string {
 		Plans    []model.ReportObjectSQLPlan
 		Versions []model.ReportSnapshotSourceVersion
 		Scope    string
-	}{s.plan.Dataset, s.plan.Spec, plans, s.versions, reportSnapshotAccessScopeHash(s.subject, []string{s.plan.Dataset.Key + ".read"})})
+		Table    *modulehost.AnalysisTableVersion `json:",omitempty"`
+	}{s.plan.Dataset, s.plan.Spec, plans, s.versions, reportSnapshotAccessScopeHash(s.subject, []string{s.plan.Dataset.Key + ".read"}), s.table})
 }
 
 func (s *QueryService) analysisResultProof(result model.AnalysisResult, state analysisState) string {

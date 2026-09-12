@@ -50,6 +50,34 @@ func TestReportApplicationConsumesOnlyOwnerDomainAndPublicHostContracts(t *testi
 	}
 }
 
+func TestAnalysisDomainHasNoTransportStorageOrOtherOwnerDependency(t *testing.T) {
+	err := filepath.WalkDir("../domain/report/service/analysis", func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, im := range file.Imports {
+			name, err := strconv.Unquote(im.Path.Value)
+			if err != nil {
+				return err
+			}
+			if name == "database/sql" || name == "net/http" || name == "os" || name == "io" || name == "archive/zip" || name == "encoding/csv" || strings.HasPrefix(name, "github.com/") && name != "github.com/domainry/domainry-report-sdk/model" {
+				t.Errorf("analysis domain crossed its pure structured-data boundary: %s -> %s", path, name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPersistenceImplementationUsesCanonicalInternalLayout(t *testing.T) {
 	if _, err := os.Stat("../persistence"); !os.IsNotExist(err) {
 		t.Fatal("Report must keep persistence under internal/infrastructure/persistence/database/report")

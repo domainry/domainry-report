@@ -14,7 +14,7 @@ import (
 )
 
 func (s *QueryService) analysisDatasets(ctx context.Context, authority model.ReportAuthority) (model.ReportSubject, []model.AnalysisDataset, error) {
-	host, err := s.analysisSources()
+	hosts, err := s.analysisSources()
 	if err != nil {
 		return model.ReportSubject{}, nil, err
 	}
@@ -25,9 +25,18 @@ func (s *QueryService) analysisDatasets(ctx context.Context, authority model.Rep
 	if !subject.HasPermission(reportsdk.ActionReportQueryExecute) {
 		return model.ReportSubject{}, nil, reportError(403, "backend.permission.denied", nil)
 	}
-	datasets, err := host.ReportAnalysisSources(ctx, subject)
-	if err != nil {
-		return model.ReportSubject{}, nil, normalizeHostError(err, "backend.report.analysis.catalog_failed")
+	datasets := []model.AnalysisDataset{}
+	for _, host := range hosts {
+		items, err := host.source.ReportAnalysisSources(ctx, subject)
+		if err != nil {
+			return model.ReportSubject{}, nil, normalizeHostError(err, "backend.report.analysis.catalog_failed")
+		}
+		for _, item := range items {
+			if item.Kind != host.kind {
+				return model.ReportSubject{}, nil, reportError(500, "backend.report.analysis.dataset_invalid", nil)
+			}
+		}
+		datasets = append(datasets, items...)
 	}
 	if len(datasets) > 4096 {
 		return model.ReportSubject{}, nil, reportError(500, "backend.report.analysis.catalog_limit_exceeded", nil)
@@ -40,7 +49,7 @@ func (s *QueryService) analysisDatasets(ctx context.Context, authority model.Rep
 		}
 		// Discovery does not grant process source access. Unlike a published
 		// Report definition, an arbitrary dataset has no owner-declared grant.
-		if !subject.HasPermission(dataset.Key + ".read") {
+		if dataset.Kind == "business_object" && !subject.HasPermission(dataset.Key+".read") {
 			continue
 		}
 		if keys[dataset.Key] || len(dataset.Name) > 256 {
@@ -51,6 +60,7 @@ func (s *QueryService) analysisDatasets(ctx context.Context, authority model.Rep
 			return model.ReportSubject{}, nil, reportError(500, "backend.report.analysis.dataset_invalid", err)
 		}
 		dataset.Columns = append([]model.AnalysisColumn{}, dataset.Columns...)
+		dataset.References = append([]model.AnalysisReference{}, dataset.References...)
 		sort.Slice(dataset.Columns, func(i, j int) bool { return dataset.Columns[i].Key < dataset.Columns[j].Key })
 		visible = append(visible, dataset)
 	}

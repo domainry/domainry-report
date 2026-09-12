@@ -59,8 +59,8 @@ func (e *analysisExecutor) ExecuteReportObjectSQL(ctx context.Context, r model.R
 func analysisFixture() (*QueryService, *analysisExecutor, *applicationTestVersions, model.ReportAuthority, model.AnalysisRequest) {
 	s, _, v, a := evidenceFixture()
 	e := &analysisExecutor{datasets: []model.AnalysisDataset{
-		{Key: "order", Name: "Orders", Kind: "business_object", Version: "schema1", Columns: []model.AnalysisColumn{{Key: "status", Type: "text"}, {Key: "amount", Type: "currency", Unit: "CNY", Precision: 19, Scale: 2}}},
-		{Key: "event", Name: "Events", Kind: "business_object", Version: "schema1", Columns: []model.AnalysisColumn{{Key: "category", Type: "text"}, {Key: "amount", Type: "currency", Unit: "CNY", Precision: 19, Scale: 2}}},
+		{Key: "order", Name: "Orders", Kind: "business_object", Version: "schema1", Columns: []model.AnalysisColumn{{Key: "status", Type: "text"}, {Key: "amount", Type: "currency", Unit: "CNY", Precision: 19, Scale: 2}}, References: []model.AnalysisReference{{Kind: "business_object", ID: "order", Label: "Orders", Version: "schema1"}}},
+		{Key: "event", Name: "Events", Kind: "business_object", Version: "schema1", Columns: []model.AnalysisColumn{{Key: "category", Type: "text"}, {Key: "amount", Type: "currency", Unit: "CNY", Precision: 19, Scale: 2}}, References: []model.AnalysisReference{{Kind: "business_object", ID: "event", Label: "Events", Version: "schema1"}}},
 	}}
 	s.objectSQL = e
 	e.versions = v
@@ -101,10 +101,13 @@ func TestAnalysisOwnerExecutesWholeDatasetAndSealsAcrossOwnerReopen(t *testing.T
 	if out.Spec.Mode != "aggregate" || out.Spec.MaxRows != 100 || out.Source.DefinitionVersion == "" || out.Source.DataVersion == "" || out.Source.Scope != "current_subject_filtered_dataset" {
 		t.Fatal(out)
 	}
+	if !out.Coverage.Complete || out.Coverage.Truncated || out.Coverage.ReturnedRows != 1 || out.Coverage.RequestedMaxRows != 100 || len(out.Coverage.Missing) != 0 || out.Visualization.Chart == nil || out.Visualization.Chart.Type != "bar" || out.Visualization.Chart.XColumn != "category" || len(out.Visualization.Chart.YColumns) != 1 || out.Visualization.Chart.YColumns[0] != "rows" || len(out.References) != 1 || out.References[0].ID != "event" {
+		t.Fatal("result metadata invalid", out)
+	}
 }
 
 func TestAnalysisOwnerRejectsAlteredResultRequestAndCurrentAuthorization(t *testing.T) {
-	for _, change := range []string{"row", "count", "method", "unit", "complete", "time", "source", "proof", "group", "filter", "dataset", "definition", "data", "user", "workspace", "scope", "permission", "source_permission", "field", "signing_key"} {
+	for _, change := range []string{"row", "count", "method", "unit", "complete", "coverage", "chart", "reference", "time", "source", "proof", "group", "filter", "dataset", "definition", "data", "user", "workspace", "scope", "permission", "source_permission", "field", "signing_key"} {
 		t.Run(change, func(t *testing.T) {
 			s, e, v, a, r := analysisFixture()
 			out, err := s.RunAnalysis(t.Context(), r, a)
@@ -124,6 +127,12 @@ func TestAnalysisOwnerRejectsAlteredResultRequestAndCurrentAuthorization(t *test
 				out.Columns[1].Unit = "USD"
 			case "complete":
 				out.Source.Complete = false
+			case "coverage":
+				out.Coverage.Truncated = true
+			case "chart":
+				out.Visualization.Chart.YColumns[0] = "secret"
+			case "reference":
+				out.References[0].ID = "secret"
 			case "time":
 				out.Source.QueriedAt = "tomorrow"
 			case "source":
@@ -223,8 +232,12 @@ func TestAnalysisCatalogUsesCurrentBoundedMetadataAndNoImplicitProcessGrants(t *
 	}
 	// Returned metadata cannot mutate the host's next discovery response.
 	first.Datasets[0].Columns[0].Key = "tampered"
+	first.Datasets[0].References[0].ID = "tampered"
 	if e.datasets[1].Columns[0].Key != "category" {
 		t.Fatal("catalog aliased host metadata")
+	}
+	if e.datasets[1].References[0].ID != "event" {
+		t.Fatal("catalog aliased host provenance")
 	}
 	for _, change := range []string{"scope", "user", "filter", "tamper"} {
 		t.Run(change, func(t *testing.T) {

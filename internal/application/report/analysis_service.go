@@ -20,6 +20,7 @@ type analysisState struct {
 	subject  model.ReportSubject
 	queries  []model.ReportObjectSQLExecutionRequest
 	versions []model.ReportSnapshotSourceVersion
+	table    *modulehost.AnalysisTableVersion
 }
 
 // RunAnalysis compiles a closed specification, executes every aggregation at
@@ -33,20 +34,14 @@ func (s *QueryService) RunAnalysis(ctx context.Context, request model.AnalysisRe
 		return model.AnalysisResult{}, err
 	}
 	beforeFingerprint := before.fingerprint()
-	results := make([]model.ReportObjectSQLExecutionResult, 0, len(before.queries))
-	for _, query := range before.queries {
-		if err := ctx.Err(); err != nil {
-			return model.AnalysisResult{}, err
-		}
-		result, err := s.objectSQL.ExecuteReportObjectSQL(ctx, query)
-		if err != nil {
-			return model.AnalysisResult{}, normalizeHostError(err, "backend.report.analysis.execution_failed")
-		}
-		results = append(results, result)
+	var evaluated analysis.Evaluation
+	if before.table != nil {
+		evaluated, err = s.evaluateAnalysisTable(ctx, before)
+	} else {
+		evaluated, err = s.evaluateAnalysisObjects(ctx, before)
 	}
-	evaluated, err := analysis.Evaluate(before.plan, results)
 	if err != nil {
-		return model.AnalysisResult{}, analysisError(err)
+		return model.AnalysisResult{}, err
 	}
 	after, err := s.analysisState(ctx, before.plan.Spec, authority)
 	if err != nil {
@@ -58,10 +53,15 @@ func (s *QueryService) RunAnalysis(ctx context.Context, request model.AnalysisRe
 	if beforeFingerprint != after.fingerprint() {
 		return model.AnalysisResult{}, reportError(409, "backend.report.analysis.source_changed", nil)
 	}
+	dataVersion := canonicalHash(after.versions)
+	if after.table != nil {
+		dataVersion = canonicalHash(after.table)
+	}
+	visualization, coverage, references := analysis.DescribeResult(after.plan, evaluated)
 	result := model.AnalysisResult{Spec: after.plan.Spec, Columns: after.plan.Columns, Rows: evaluated.Rows, Methods: after.plan.Methods, Source: model.AnalysisSource{
-		DatasetKey: after.plan.Dataset.Key, DefinitionVersion: canonicalHash(after.plan.Dataset), DataVersion: canonicalHash(after.versions),
+		DatasetKey: after.plan.Dataset.Key, DefinitionVersion: canonicalHash(after.plan.Dataset), DataVersion: dataVersion,
 		QueriedAt: s.clock().UTC().Format(time.RFC3339Nano), InputCounts: evaluated.InputCounts, Scope: "current_subject_filtered_dataset", Complete: true,
-	}}
+	}, Visualization: visualization, Coverage: coverage, References: references}
 	raw, err := json.Marshal(result)
 	if err != nil || len(raw) > analysisMaximumResultBytes {
 		return model.AnalysisResult{}, reportError(422, "backend.report.analysis.result_limit_exceeded", err)
@@ -70,13 +70,28 @@ func (s *QueryService) RunAnalysis(ctx context.Context, request model.AnalysisRe
 	return result, nil
 }
 
-func (s *QueryService) analysisState(ctx context.Context, request model.AnalysisRequest, authority model.ReportAuthority) (analysisState, error) {
-	if s == nil || s.objectSQL == nil || len(s.cursorKey) == 0 || s.clock == nil {
-		return analysisState{}, reportError(500, "backend.report.analysis.unavailable", nil)
+func (s *QueryService) evaluateAnalysisObjects(ctx context.Context, before analysisState) (analysis.Evaluation, error) {
+	results := make([]model.ReportObjectSQLExecutionResult, 0, len(before.queries))
+	for _, query := range before.queries {
+		if err := ctx.Err(); err != nil {
+			return analysis.Evaluation{}, err
+		}
+		result, err := s.objectSQL.ExecuteReportObjectSQL(ctx, query)
+		if err != nil {
+			return analysis.Evaluation{}, normalizeHostError(err, "backend.report.analysis.execution_failed")
+		}
+		results = append(results, result)
 	}
-	versions, ok := s.objectSQL.(modulehost.AnalysisSourceVersionReader)
-	if !ok {
-		return analysisState{}, reportError(500, "backend.report.analysis.source_version_unavailable", nil)
+	evaluated, err := analysis.Evaluate(before.plan, results)
+	if err != nil {
+		return analysis.Evaluation{}, analysisError(err)
+	}
+	return evaluated, nil
+}
+
+func (s *QueryService) analysisState(ctx context.Context, request model.AnalysisRequest, authority model.ReportAuthority) (analysisState, error) {
+	if s == nil || len(s.cursorKey) == 0 || s.clock == nil {
+		return analysisState{}, reportError(500, "backend.report.analysis.unavailable", nil)
 	}
 	subject, datasets, err := s.analysisDatasets(ctx, authority)
 	if err != nil {
@@ -97,6 +112,13 @@ func (s *QueryService) analysisState(ctx context.Context, request model.Analysis
 		return analysisState{}, analysisError(err)
 	}
 	state := analysisState{plan: plan, subject: subject}
+	if dataset.Kind == "table_file" {
+		return s.analysisTableState(ctx, state)
+	}
+	versions, ok := s.objectSQL.(modulehost.AnalysisSourceVersionReader)
+	if !ok {
+		return analysisState{}, reportError(500, "backend.report.analysis.source_version_unavailable", nil)
+	}
 	for _, query := range plan.Queries {
 		compiled, err := s.compileAuthorizedObjectSQL(ctx, query.Report, subject)
 		if err != nil {
@@ -141,15 +163,26 @@ func analysisError(err error) error {
 	return reportError(status, "backend.report.analysis."+failure.Code, err)
 }
 
-func (s *QueryService) analysisSources() (modulehost.AnalysisSources, error) {
-	if s == nil || s.objectSQL == nil || len(s.cursorKey) == 0 {
+type analysisCatalogSource struct {
+	source modulehost.AnalysisSources
+	kind   string
+}
+
+func (s *QueryService) analysisSources() ([]analysisCatalogSource, error) {
+	if s == nil || len(s.cursorKey) == 0 {
 		return nil, reportError(500, "backend.report.analysis.unavailable", nil)
 	}
-	host, ok := s.objectSQL.(modulehost.AnalysisSources)
-	if !ok {
+	sources := []analysisCatalogSource{}
+	if host, ok := s.objectSQL.(modulehost.AnalysisSources); ok {
+		sources = append(sources, analysisCatalogSource{source: host, kind: "business_object"})
+	}
+	if s.tables != nil {
+		sources = append(sources, analysisCatalogSource{source: s.tables, kind: "table_file"})
+	}
+	if len(sources) == 0 {
 		return nil, reportError(500, "backend.report.analysis.unavailable", nil)
 	}
-	return host, nil
+	return sources, nil
 }
 
 var _ reportsdk.Analyses = (*QueryService)(nil)
