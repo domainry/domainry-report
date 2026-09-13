@@ -30,8 +30,8 @@ func (s *QueryService) resultReadScope(ctx context.Context, report model.ReportS
 }
 
 // The current source owner attests the actual data projection independently
-// of execution grants. Identity remains bound to the original reader until
-// an explicit cross-subject sharing contract is implemented.
+// of execution grants. The proof remains bound to the original producer;
+// shared reading verifies it separately from the actual reader's policy.
 func resultReadIdentity(subject model.ReportSubject) string {
 	return canonicalHash([]any{subject.Principal.WorkspaceID, subject.Principal.UserID, subject.TrustedProcess})
 }

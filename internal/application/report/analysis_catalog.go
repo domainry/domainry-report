@@ -26,7 +26,7 @@ func (s *QueryService) analysisDatasetsForAction(ctx context.Context, authority 
 	if err != nil {
 		return model.ReportSubject{}, nil, err
 	}
-	if !subject.HasPermission(action) {
+	if action != "" && !subject.HasPermission(action) {
 		return model.ReportSubject{}, nil, reportError(403, "backend.permission.denied", nil)
 	}
 	datasets := []model.AnalysisDataset{}

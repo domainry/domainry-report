@@ -262,7 +262,7 @@ func TestReportHTTPAdapterRejectsTrailingJSONAndForwardsCallerProof(t *testing.T
 		t.Fatalf("query authority=%#v", queries.authority)
 	}
 
-	request = httptest.NewRequest(http.MethodPost, "/report/sales/exports/order/prepare", strings.NewReader(`{"audit_id":"audit-1","scope":{"purpose":"test","freshness":{"mode":"realtime"}}}`))
+	request = httptest.NewRequest(http.MethodPost, "/report/sales/exports/order/prepare", strings.NewReader(`{"audit_id":"audit-1","retry_of_job_id":"failed-job-1","scope":{"purpose":"test","freshness":{"mode":"realtime"}}}`))
 	if err := reportcontract.ApplyExportPrepareHeaders(request.Header, "export:orders:request-1", "approved test export"); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestReportHTTPAdapterRejectsTrailingJSONAndForwardsCallerProof(t *testing.T
 	if response.Code != http.StatusAccepted || response.Header().Get("Location") != "/data-exchange/jobs/job-1?provider=reports&operation=export" {
 		t.Fatalf("prepare status=%d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
 	}
-	if exports.prepareRequest.IdempotencyKey != "export:orders:request-1" {
+	if exports.prepareRequest.IdempotencyKey != "export:orders:request-1" || exports.prepareRequest.RetryOfJobID != "failed-job-1" {
 		t.Fatalf("prepare request=%#v", exports.prepareRequest)
 	}
 }

@@ -130,7 +130,7 @@ func reportOpenAPIOperationsByAction() map[string]map[string]any {
 		sdk.ActionReportExportsPrepare: {
 			"operationId": "prepareReportExport", "tags": []string{"Reports"}, "summary": "Prepare a governed report export",
 			"security": security, "parameters": []any{reportKey, pathParameter("objectKey")},
-			"requestBody": jsonRequestBody(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"audit_id", "scope"}, "properties": map[string]any{"audit_id": map[string]any{"type": "string"}, "scope": reportExportScopeOpenAPISchema()}}),
+			"requestBody": jsonRequestBody(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"audit_id", "scope"}, "properties": map[string]any{"audit_id": map[string]any{"type": "string"}, "retry_of_job_id": map[string]any{"type": "string", "description": "Failed predecessor job ID for one new, freshly authorized attempt; the original job remains unchanged."}, "scope": reportExportScopeOpenAPISchema()}}),
 			"responses":   standardOpenAPIResponses("202", "Accepted report export job", reportExportJobOpenAPISchema()),
 		},
 	}
@@ -221,8 +221,9 @@ func (s *reportHTTPAdapter) refreshSnapshot(w http.ResponseWriter, r *http.Reque
 
 func (s *reportHTTPAdapter) prepareExport(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		AuditID string                               `json:"audit_id"`
-		Scope   reportmodel.ReportExportScopeRequest `json:"scope"`
+		AuditID      string                               `json:"audit_id"`
+		Scope        reportmodel.ReportExportScopeRequest `json:"scope"`
+		RetryOfJobID string                               `json:"retry_of_job_id,omitempty"`
 	}
 	if err := decodeReportJSON(w, r, &request); err != nil {
 		writeReportError(w, &sdk.Error{StatusCode: 400, Code: "backend.bad_request", Cause: err})
@@ -231,6 +232,7 @@ func (s *reportHTTPAdapter) prepareExport(w http.ResponseWriter, r *http.Request
 	job, err := s.binding.Exports().Prepare(r.Context(), reportmodel.ReportExportPrepareRequest{
 		ReportKey: strings.TrimSpace(r.PathValue("reportKey")), ObjectKey: strings.TrimSpace(r.PathValue("objectKey")),
 		AuditID: strings.TrimSpace(request.AuditID), IdempotencyKey: strings.TrimSpace(r.Header.Get("Idempotency-Key")), Scope: request.Scope,
+		RetryOfJobID: strings.TrimSpace(request.RetryOfJobID),
 	}, reportAuthority(r))
 	if err != nil {
 		writeReportError(w, err)

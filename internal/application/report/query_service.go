@@ -130,7 +130,9 @@ func (s *QueryService) resolve(ctx context.Context, reportKey string, authority 
 	if err != nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, err
 	}
-	if !subject.HasPermission(strings.TrimSpace(actionKey)) {
+	// Empty action is used only to authenticate an original shared-result proof.
+	// Current data and audience checks below still apply; no execution is offered.
+	if actionKey != "" && !subject.HasPermission(strings.TrimSpace(actionKey)) {
 		return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(403, "backend.permission.denied", nil)
 	}
 	reports, err := s.definitions.ReportDefinitions(ctx)
@@ -143,7 +145,7 @@ func (s *QueryService) resolve(ctx context.Context, reportKey string, authority 
 			continue
 		}
 		resolvedSubject := subject
-		if resolvedSubject.TrustedProcess {
+		if resolvedSubject.TrustedProcess && actionKey != "" {
 			// The trusted process must already hold the report operation grant.
 			// Once the report key is resolved, Report narrows the execution to
 			// that definition's exact source permissions before crossing any
