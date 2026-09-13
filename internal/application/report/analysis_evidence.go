@@ -49,6 +49,7 @@ func (s analysisState) fingerprint() string {
 
 func (s *QueryService) analysisResultProof(result model.AnalysisResult, state analysisState) string {
 	result.Source.Proof = ""
+	result.Source.ReadProof = ""
 	return s.queryProof("report-analysis-result-v1", struct {
 		Result      model.AnalysisResult
 		Fingerprint string

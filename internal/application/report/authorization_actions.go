@@ -10,7 +10,7 @@ import (
 
 const AuthorizationOwner = "module:report"
 
-// AuthorizationActions is Report's complete HTTP Action manifest. Report
+// AuthorizationActions is Report's complete public Action manifest. Report
 // execution is authenticated-principal based and every public entry owns one
 // same-key Permission. Report definitions may add narrower source permissions,
 // but they never replace the executable entry Permission.
@@ -21,6 +21,10 @@ func AuthorizationActions() ([]actioncontract.ActionDefinition, error) {
 		reportAction(reportsdk.ActionReportSnapshotsRefresh, "POST /report/{reportKey}/snapshots/refresh", "Refresh report snapshot", actioncontract.EffectWrite, actioncontract.RiskMedium, "caller_key_required", "mutation_audit_required"),
 		reportAction(reportsdk.ActionReportExportsPrepare, "POST /report/{reportKey}/exports/{objectKey}/prepare", "Prepare report export", actioncontract.EffectWrite, actioncontract.RiskHigh, "caller_key_required", "business_export_prepare_audit", actioncontract.ApprovalReason, actioncontract.ApprovalConfirmation),
 	}
+	read := reportAction(reportsdk.ActionReportResultsRead, "", "Read saved report and analysis results", actioncontract.EffectRead, actioncontract.RiskLow, "not_applicable", "owner_read_audit_policy")
+	read.HTTP, read.SourceKind = nil, "module"
+	read.NonHTTP = []actioncontract.NonHTTPBinding{{Kind: "sdk", InvocationKey: reportsdk.ActionReportResultsRead}}
+	definitions = append(definitions, read)
 	result := make([]actioncontract.ActionDefinition, 0, len(definitions))
 	for _, definition := range definitions {
 		normalized, err := actioncontract.NormalizeDefinition(definition)

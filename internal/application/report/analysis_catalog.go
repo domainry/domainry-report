@@ -14,6 +14,10 @@ import (
 )
 
 func (s *QueryService) analysisDatasets(ctx context.Context, authority model.ReportAuthority) (model.ReportSubject, []model.AnalysisDataset, error) {
+	return s.analysisDatasetsForAction(ctx, authority, reportsdk.ActionReportQueryExecute)
+}
+
+func (s *QueryService) analysisDatasetsForAction(ctx context.Context, authority model.ReportAuthority, action string) (model.ReportSubject, []model.AnalysisDataset, error) {
 	hosts, err := s.analysisSources()
 	if err != nil {
 		return model.ReportSubject{}, nil, err
@@ -22,7 +26,7 @@ func (s *QueryService) analysisDatasets(ctx context.Context, authority model.Rep
 	if err != nil {
 		return model.ReportSubject{}, nil, err
 	}
-	if !subject.HasPermission(reportsdk.ActionReportQueryExecute) {
+	if !subject.HasPermission(action) {
 		return model.ReportSubject{}, nil, reportError(403, "backend.permission.denied", nil)
 	}
 	datasets := []model.AnalysisDataset{}
@@ -114,6 +118,7 @@ func (s *QueryService) AnalysisCatalog(ctx context.Context, request model.Analys
 		content, _ := json.Marshal(cursor)
 		out.NextCursor, out.Truncated = base64.RawURLEncoding.EncodeToString(content), true
 	}
+	out.ReadProof = s.analysisCatalogReadProof(request, out, datasets, subject)
 	return out, nil
 }
 

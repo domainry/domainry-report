@@ -37,6 +37,10 @@ func (s *QueryService) analysisTableState(ctx context.Context, state analysisSta
 		return analysisState{}, reportError(422, "backend.report.analysis.result_limit_exceeded", nil)
 	}
 	state.table = &version
+	// This owner API reauthorizes every field and attests every projected cell
+	// of the complete immutable table; no generic authorization revision is
+	// needed to prove identical readable data. A missing/changed table fails above.
+	state.readScope = canonicalHash(version)
 	return state, nil
 }
 

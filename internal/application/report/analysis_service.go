@@ -16,11 +16,12 @@ import (
 const analysisMaximumResultBytes = 2 << 20
 
 type analysisState struct {
-	plan     analysis.Plan
-	subject  model.ReportSubject
-	queries  []model.ReportObjectSQLExecutionRequest
-	versions []model.ReportSnapshotSourceVersion
-	table    *modulehost.AnalysisTableVersion
+	plan      analysis.Plan
+	subject   model.ReportSubject
+	queries   []model.ReportObjectSQLExecutionRequest
+	versions  []model.ReportSnapshotSourceVersion
+	table     *modulehost.AnalysisTableVersion
+	readScope string
 }
 
 // RunAnalysis compiles a closed specification, executes every aggregation at
@@ -50,7 +51,7 @@ func (s *QueryService) RunAnalysis(ctx context.Context, request model.AnalysisRe
 	if err := ctx.Err(); err != nil {
 		return model.AnalysisResult{}, err
 	}
-	if beforeFingerprint != after.fingerprint() {
+	if beforeFingerprint != after.fingerprint() || before.readScope != after.readScope {
 		return model.AnalysisResult{}, reportError(409, "backend.report.analysis.source_changed", nil)
 	}
 	dataVersion := canonicalHash(after.versions)
@@ -67,6 +68,9 @@ func (s *QueryService) RunAnalysis(ctx context.Context, request model.AnalysisRe
 		return model.AnalysisResult{}, reportError(422, "backend.report.analysis.result_limit_exceeded", err)
 	}
 	result.Source.Proof = s.analysisResultProof(result, after)
+	if after.readScope != "" {
+		result.Source.ReadProof = s.analysisResultReadProof(result, after)
+	}
 	return result, nil
 }
 
@@ -90,10 +94,14 @@ func (s *QueryService) evaluateAnalysisObjects(ctx context.Context, before analy
 }
 
 func (s *QueryService) analysisState(ctx context.Context, request model.AnalysisRequest, authority model.ReportAuthority) (analysisState, error) {
+	return s.analysisStateForAction(ctx, request, authority, reportsdk.ActionReportQueryExecute)
+}
+
+func (s *QueryService) analysisStateForAction(ctx context.Context, request model.AnalysisRequest, authority model.ReportAuthority, action string) (analysisState, error) {
 	if s == nil || len(s.cursorKey) == 0 || s.clock == nil {
 		return analysisState{}, reportError(500, "backend.report.analysis.unavailable", nil)
 	}
-	subject, datasets, err := s.analysisDatasets(ctx, authority)
+	subject, datasets, err := s.analysisDatasetsForAction(ctx, authority, action)
 	if err != nil {
 		return analysisState{}, err
 	}
@@ -119,6 +127,8 @@ func (s *QueryService) analysisState(ctx context.Context, request model.Analysis
 	if !ok {
 		return analysisState{}, reportError(500, "backend.report.analysis.source_version_unavailable", nil)
 	}
+	readScopes := []string{}
+	allReadScopes := true
 	for _, query := range plan.Queries {
 		compiled, err := s.compileAuthorizedObjectSQL(ctx, query.Report, subject)
 		if err != nil {
@@ -141,9 +151,18 @@ func (s *QueryService) analysisState(ctx context.Context, request model.Analysis
 			}
 		}
 		state.versions = append(state.versions, version)
+		readScope, err := s.resultReadScope(ctx, query.Report, subject)
+		if err != nil {
+			return analysisState{}, err
+		}
+		allReadScopes = allReadScopes && readScope != ""
+		readScopes = append(readScopes, readScope)
 		// No PageSize/continuation is supplied: LIMIT bounds aggregate output,
 		// while host SQL must aggregate the entire authorized input relation.
 		state.queries = append(state.queries, model.ReportObjectSQLExecutionRequest{Report: query.Report, Plan: compiled, Parameters: parameters, Subject: subject, Timeout: 30 * time.Second})
+	}
+	if allReadScopes && len(readScopes) > 0 {
+		state.readScope = canonicalHash(readScopes)
 	}
 	return state, nil
 }

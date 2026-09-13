@@ -112,6 +112,7 @@ func (s *QueryService) Catalog(ctx context.Context, request reportmodel.ReportCa
 			Parameters: parameters, ResultSchema: append([]reportmodel.ReportResultColumnSchema{}, plan.ResultSchema...), RowLimit: plan.Limit,
 		})
 	}
+	out.ReadProof = s.catalogReadProof(request, out, reports, subject)
 	return out, nil
 }
 

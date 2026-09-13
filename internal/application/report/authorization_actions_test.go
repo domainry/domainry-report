@@ -13,7 +13,7 @@ func TestAuthorizationActionsFreezeAsOneManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(definitions) != 4 {
+	if len(definitions) != 5 {
 		t.Fatalf("Action count=%d", len(definitions))
 	}
 	registry := actioncontract.NewRegistry()
@@ -23,11 +23,11 @@ func TestAuthorizationActionsFreezeAsOneManifest(t *testing.T) {
 	if err := registry.Freeze(); err != nil {
 		t.Fatal(err)
 	}
-	if permissions := registry.PermissionDefinitions(); len(permissions) != 4 {
+	if permissions := registry.PermissionDefinitions(); len(permissions) != 5 {
 		t.Fatalf("Report exact Permissions=%#v", permissions)
 	}
 	for _, definition := range registry.Definitions() {
-		if definition.Owner != AuthorizationOwner || definition.HTTP == nil || definition.Authorization.Strategy != actioncontract.AuthorizationAuthenticated || definition.Permission == nil || definition.Permission.Key != definition.Key {
+		if definition.Owner != AuthorizationOwner || (definition.HTTP == nil) != (definition.Key == reportsdk.ActionReportResultsRead) || definition.Authorization.Strategy != actioncontract.AuthorizationAuthenticated || definition.Permission == nil || definition.Permission.Key != definition.Key {
 			t.Fatalf("invalid Report Action: %#v", definition)
 		}
 		if definition.Key == reportsdk.ActionReportExportsPrepare {

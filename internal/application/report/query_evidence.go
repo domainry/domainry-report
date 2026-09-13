@@ -15,10 +15,11 @@ import (
 )
 
 type queryEvidenceState struct {
-	report  reportmodel.ReportSchema
-	subject reportmodel.ReportSubject
-	plan    reportmodel.ReportObjectSQLPlan
-	version string
+	report    reportmodel.ReportSchema
+	subject   reportmodel.ReportSubject
+	plan      reportmodel.ReportObjectSQLPlan
+	version   string
+	readScope string
 }
 
 // Query returns evidence only after the existing owner has executed the
@@ -40,7 +41,7 @@ func (s *QueryService) Query(ctx context.Context, request reportmodel.ReportObje
 	if err != nil {
 		return reportmodel.ReportQueryResult{}, err
 	}
-	if before.fingerprint() != after.fingerprint() {
+	if before.fingerprint() != after.fingerprint() || before.readScope != after.readScope {
 		return reportmodel.ReportQueryResult{}, reportError(409, "backend.report.source_changed", nil)
 	}
 	out := reportmodel.ReportQueryResult{Summary: summary, Source: reportmodel.ReportQuerySource{
@@ -49,6 +50,9 @@ func (s *QueryService) Query(ctx context.Context, request reportmodel.ReportObje
 		Complete: request.Page.Cursor == "" && !summary.Truncated,
 	}}
 	out.Source.Proof = s.resultProof(request, out, after)
+	if after.readScope != "" {
+		out.Source.ReadProof = s.queryResultReadProof(request, out, after)
+	}
 	return out, nil
 }
 
@@ -69,10 +73,14 @@ func (s *QueryService) AuthorizeQueryResult(ctx context.Context, request reportm
 }
 
 func (s *QueryService) queryEvidenceState(ctx context.Context, key string, authority reportmodel.ReportAuthority) (queryEvidenceState, error) {
+	return s.queryEvidenceStateForAction(ctx, key, authority, reportsdk.ActionReportQueryExecute)
+}
+
+func (s *QueryService) queryEvidenceStateForAction(ctx context.Context, key string, authority reportmodel.ReportAuthority, action string) (queryEvidenceState, error) {
 	if s == nil || s.sourceVersions == nil || len(s.cursorKey) == 0 || s.clock == nil {
 		return queryEvidenceState{}, reportError(500, "backend.report.evidence_unavailable", nil)
 	}
-	subject, definition, err := s.resolve(ctx, key, authority, reportsdk.ActionReportQueryExecute)
+	subject, definition, err := s.resolve(ctx, key, authority, action)
 	if err != nil {
 		return queryEvidenceState{}, err
 	}
@@ -85,7 +93,11 @@ func (s *QueryService) queryEvidenceState(ctx context.Context, key string, autho
 	if err != nil {
 		return queryEvidenceState{}, normalizeHostError(err, "backend.report.source_version_failed")
 	}
-	return queryEvidenceState{report: definition, subject: subject, plan: plan, version: canonicalHash(version)}, nil
+	readScope, err := s.resultReadScope(ctx, scoped, subject)
+	if err != nil {
+		return queryEvidenceState{}, err
+	}
+	return queryEvidenceState{report: definition, subject: subject, plan: plan, version: canonicalHash(version), readScope: readScope}, nil
 }
 
 func normalizedEvidenceQuery(report reportmodel.ReportSchema, request reportmodel.ReportObjectSQLRequest) (reportmodel.ReportObjectSQLRequest, error) {
@@ -117,6 +129,7 @@ func (s queryEvidenceState) fingerprint() string {
 
 func (s *QueryService) resultProof(query reportmodel.ReportObjectSQLRequest, result reportmodel.ReportQueryResult, state queryEvidenceState) string {
 	result.Source.Proof = ""
+	result.Source.ReadProof = ""
 	return s.queryProof("report-query-result-v1", struct {
 		Query       reportmodel.ReportObjectSQLRequest
 		Result      reportmodel.ReportQueryResult
