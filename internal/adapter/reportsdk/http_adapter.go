@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"sort"
 	"strconv"
@@ -131,7 +132,7 @@ func reportOpenAPIOperationsByAction() map[string]map[string]any {
 			"operationId": "prepareReportExport", "tags": []string{"Reports"}, "summary": "Prepare a governed report export",
 			"security": security, "parameters": []any{reportKey, pathParameter("objectKey")},
 			"requestBody": jsonRequestBody(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"audit_id", "scope"}, "properties": map[string]any{"audit_id": map[string]any{"type": "string"}, "retry_of_job_id": map[string]any{"type": "string", "description": "Failed predecessor job ID for one new, freshly authorized attempt; the original job remains unchanged."}, "scope": reportExportScopeOpenAPISchema()}}),
-			"responses":   standardOpenAPIResponses("202", "Accepted report export job", reportExportJobOpenAPISchema()),
+			"responses":   reportExportPrepareOpenAPIResponses(),
 		},
 	}
 }
@@ -152,6 +153,15 @@ func standardOpenAPIResponses(status, description string, schema map[string]any)
 		"403": reportOpenAPIErrorResponse("Forbidden"), "404": reportOpenAPIErrorResponse("Report not found"), "409": reportOpenAPIErrorResponse("Report state conflict"),
 		"default": reportOpenAPIErrorResponse(),
 	}
+}
+
+func reportExportPrepareOpenAPIResponses() map[string]any {
+	responses := standardOpenAPIResponses("202", "Accepted asynchronous report export job", reportExportJobOpenAPISchema())
+	responses["200"] = map[string]any{
+		"description": "Completed bounded report export",
+		"content":     map[string]any{"text/csv": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}},
+	}
+	return responses
 }
 
 func reportOpenAPIErrorResponse(descriptions ...string) map[string]any {
@@ -229,17 +239,57 @@ func (s *reportHTTPAdapter) prepareExport(w http.ResponseWriter, r *http.Request
 		writeReportError(w, &sdk.Error{StatusCode: 400, Code: "backend.bad_request", Cause: err})
 		return
 	}
-	job, err := s.binding.Exports().Prepare(r.Context(), reportmodel.ReportExportPrepareRequest{
+	prepareRequest := reportmodel.ReportExportPrepareRequest{
 		ReportKey: strings.TrimSpace(r.PathValue("reportKey")), ObjectKey: strings.TrimSpace(r.PathValue("objectKey")),
 		AuditID: strings.TrimSpace(request.AuditID), IdempotencyKey: strings.TrimSpace(r.Header.Get("Idempotency-Key")), Scope: request.Scope,
 		RetryOfJobID: strings.TrimSpace(request.RetryOfJobID),
-	}, reportAuthority(r))
+	}
+	exports := s.binding.Exports()
+	result := reportmodel.ReportExportPreparation{}
+	var err error
+	if delivery, ok := exports.(sdk.ExportDelivery); ok {
+		result, err = delivery.PrepareForDelivery(r.Context(), prepareRequest, reportAuthority(r))
+	} else {
+		result.Job, err = exports.Prepare(r.Context(), prepareRequest, reportAuthority(r))
+	}
 	if err != nil {
 		writeReportError(w, err)
 		return
 	}
-	w.Header().Set("Location", "/data-exchange/jobs/"+job.ID+"?provider=reports&operation=export")
-	writeReportJSON(w, http.StatusAccepted, job)
+	w.Header().Set("Location", "/data-exchange/jobs/"+result.Job.ID+"?provider=reports&operation=export")
+	if result.Artifact == nil {
+		writeReportJSON(w, http.StatusAccepted, result.Job)
+		return
+	}
+	writePreparedReportExport(w, result.Job, result.Artifact)
+}
+
+func writePreparedReportExport(w http.ResponseWriter, job reportmodel.ReportExportJob, artifact *reportmodel.ReportExportArtifact) {
+	if artifact == nil || artifact.Content == nil {
+		writeReportError(w, &sdk.Error{StatusCode: http.StatusInternalServerError, Code: "backend.report.export_artifact_unavailable"})
+		return
+	}
+	defer artifact.Content.Close()
+	contentType := strings.TrimSpace(artifact.ContentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	filename := strings.TrimSpace(artifact.Filename)
+	if filename == "" {
+		filename = "report-export.csv"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+	w.Header().Set("Cache-Control", "no-store, private")
+	w.Header().Set("X-Report-Export-Job-ID", job.ID)
+	if artifact.ContentSHA256 != "" {
+		w.Header().Set("ETag", `"sha256:`+artifact.ContentSHA256+`"`)
+	}
+	if artifact.Size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(artifact.Size, 10))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, artifact.Content)
 }
 
 func reportAuthority(r *http.Request) reportmodel.ReportAuthority {

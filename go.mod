@@ -7,7 +7,7 @@ require (
 	github.com/domainry/domainry-identity-sdk v0.1.11
 	github.com/domainry/domainry-notification-sdk v0.1.1
 	github.com/domainry/domainry-orm v0.1.30
-	github.com/domainry/domainry-report-sdk v0.1.10
+	github.com/domainry/domainry-report-sdk v0.1.11
 	github.com/shopspring/decimal v1.4.0
 	modernc.org/sqlite v1.57.0
 )

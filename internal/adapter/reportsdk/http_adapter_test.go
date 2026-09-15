@@ -2,6 +2,7 @@ package reportsdk
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -37,11 +38,17 @@ func (reportHTTPSnapshots) Refresh(context.Context, reportmodel.ReportSnapshotRe
 
 type reportHTTPExports struct {
 	prepareRequest reportmodel.ReportExportPrepareRequest
+	artifact       *reportmodel.ReportExportArtifact
 }
 
 func (e *reportHTTPExports) Prepare(_ context.Context, request reportmodel.ReportExportPrepareRequest, _ reportmodel.ReportAuthority) (reportmodel.ReportExportJob, error) {
 	e.prepareRequest = request
 	return reportmodel.ReportExportJob{ID: "job-1"}, nil
+}
+
+func (e *reportHTTPExports) PrepareForDelivery(_ context.Context, request reportmodel.ReportExportPrepareRequest, _ reportmodel.ReportAuthority) (reportmodel.ReportExportPreparation, error) {
+	e.prepareRequest = request
+	return reportmodel.ReportExportPreparation{Job: reportmodel.ReportExportJob{ID: "job-1"}, Artifact: e.artifact}, nil
 }
 
 func (*reportHTTPExports) ResolveExecution(context.Context, reportmodel.ReportExportExecutionRequest, reportmodel.ReportAuthority) (reportmodel.ReportExportExecution, error) {
@@ -132,7 +139,7 @@ func TestReportHTTPAdapterOwnsExactRoutesGovernanceAndOpenAPI(t *testing.T) {
 		}
 	}
 	responses := prepare["responses"].(map[string]any)
-	if responses["202"] == nil || responses["200"] != nil {
+	if responses["202"] == nil || responses["200"] == nil {
 		t.Fatalf("export prepare responses=%#v", responses)
 	}
 	governanceErrors := responses["400"].(map[string]any)["x-domainry-error-codes"]
@@ -273,6 +280,20 @@ func TestReportHTTPAdapterRejectsTrailingJSONAndForwardsCallerProof(t *testing.T
 	}
 	if exports.prepareRequest.IdempotencyKey != "export:orders:request-1" || exports.prepareRequest.RetryOfJobID != "failed-job-1" {
 		t.Fatalf("prepare request=%#v", exports.prepareRequest)
+	}
+
+	exports.artifact = &reportmodel.ReportExportArtifact{
+		ID: "artifact-1", Filename: "sales.csv", ContentType: "text/csv; charset=utf-8", ContentSHA256: "abc123", Size: 14,
+		Content: io.NopCloser(strings.NewReader("id,name\n1,one\n")),
+	}
+	request = httptest.NewRequest(http.MethodPost, "/report/sales/exports/order/prepare", strings.NewReader(`{"audit_id":"audit-2","scope":{"purpose":"test","freshness":{"mode":"realtime"}}}`))
+	if err := reportcontract.ApplyExportPrepareHeaders(request.Header, "export:orders:request-2", "approved bounded export"); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "id,name\n1,one\n" || response.Header().Get("X-Report-Export-Job-ID") != "job-1" || response.Header().Get("Content-Disposition") != `attachment; filename=sales.csv` {
+		t.Fatalf("inline prepare status=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
 	}
 }
 

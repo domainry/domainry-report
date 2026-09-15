@@ -8,8 +8,8 @@ github.com/domainry/domainry-notification-sdk v0.1.1 h1:D9d4gpn6Y+kvWXbV+AyqmJz9
 github.com/domainry/domainry-notification-sdk v0.1.1/go.mod h1:kcln/3xdvUCl7sCxiedKFsTiFbAwVLc4zxe1TCo/Hp4=
 github.com/domainry/domainry-orm v0.1.30 h1:5QOtG2qRzV1PhiioS2aKfCoEt9ab3OBucwicHAn/5HQ=
 github.com/domainry/domainry-orm v0.1.30/go.mod h1:gB/ooN737tsBYHbeHqCpngEprvdvZKp0Zygtzv+IPJY=
-github.com/domainry/domainry-report-sdk v0.1.10 h1:eEzRJyxfDu1OvwKg98zda+dk0Qb6daKL80yU66r/gpg=
-github.com/domainry/domainry-report-sdk v0.1.10/go.mod h1:Zn9LwcykLGVzNpdJxmbmuIWNUeoKz2uVjkVupkcZ9ZE=
+github.com/domainry/domainry-report-sdk v0.1.11 h1:IWDuebRiFECUZhErey4XHhzbGe6/GXGktTdRCktoW98=
+github.com/domainry/domainry-report-sdk v0.1.11/go.mod h1:Zn9LwcykLGVzNpdJxmbmuIWNUeoKz2uVjkVupkcZ9ZE=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/golang/glog v1.2.5 h1:DrW6hGnjIhtvhOIiAKT6Psh/Kd/ldepEa81DKeiRJ5I=

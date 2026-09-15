@@ -29,24 +29,44 @@ func NewExportService(queries *QueryService, definitions ExportDefinitionProvide
 }
 
 func (s *ExportService) Prepare(ctx context.Context, request reportmodel.ReportExportPrepareRequest, authority reportmodel.ReportAuthority) (reportmodel.ReportExportJob, error) {
+	result, err := s.prepare(ctx, request, authority, false)
+	return result.Job, err
+}
+
+// PrepareForDelivery preserves the durable job contract and lets a capable
+// host attach the same job's completed, reauthorized artifact.
+func (s *ExportService) PrepareForDelivery(ctx context.Context, request reportmodel.ReportExportPrepareRequest, authority reportmodel.ReportAuthority) (reportmodel.ReportExportPreparation, error) {
+	return s.prepare(ctx, request, authority, true)
+}
+
+func (s *ExportService) prepare(ctx context.Context, request reportmodel.ReportExportPrepareRequest, authority reportmodel.ReportAuthority, deliver bool) (reportmodel.ReportExportPreparation, error) {
 	if s == nil || s.queries == nil || s.gateway == nil {
-		return reportmodel.ReportExportJob{}, reportError(500, "backend.report.export_unavailable", nil)
+		return reportmodel.ReportExportPreparation{}, reportError(500, "backend.report.export_unavailable", nil)
 	}
 	if strings.TrimSpace(request.IdempotencyKey) == "" {
-		return reportmodel.ReportExportJob{}, reportError(400, "backend.idempotency.key_required", nil)
+		return reportmodel.ReportExportPreparation{}, reportError(400, "backend.idempotency.key_required", nil)
 	}
 	subject, resolved, _, err := s.resolveExecution(ctx, reportmodel.ReportExportExecutionRequest{
 		ReportKey: request.ReportKey, ObjectKey: request.ObjectKey, Scope: request.Scope,
 	}, authority)
 	if err != nil {
-		return reportmodel.ReportExportJob{}, err
+		return reportmodel.ReportExportPreparation{}, err
 	}
 	request.Scope = resolved.Scope
+	if deliver {
+		if gateway, ok := s.gateway.(modulehost.ExportDeliveryGateway); ok {
+			result, err := gateway.PrepareReportExportDelivery(ctx, request, resolved.Definition.Report, resolved.Definition.Control, subject)
+			if err != nil {
+				return reportmodel.ReportExportPreparation{}, normalizeHostError(err, "backend.report.export_prepare_failed")
+			}
+			return result, nil
+		}
+	}
 	job, err := s.gateway.PrepareReportExport(ctx, request, resolved.Definition.Report, resolved.Definition.Control, subject)
 	if err != nil {
-		return reportmodel.ReportExportJob{}, normalizeHostError(err, "backend.report.export_prepare_failed")
+		return reportmodel.ReportExportPreparation{}, normalizeHostError(err, "backend.report.export_prepare_failed")
 	}
-	return job, nil
+	return reportmodel.ReportExportPreparation{Job: job}, nil
 }
 
 // ResolveExecution applies Report-owned export policy to the current owner
