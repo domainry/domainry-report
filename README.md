@@ -1,5 +1,7 @@
 # domainry-report
 
+Agent-facing question index and source-owned guides: [`capability/agent/index.json`](capability/agent/index.json).
+
 Source-owned Report module for HTTP delivery, query and Object SQL use cases,
 governed export entrypoints, definition synchronization, and snapshot
 orchestration/persistence.
