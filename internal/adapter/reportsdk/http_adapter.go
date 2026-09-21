@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/domainry/domainry-foundation/modulehttp"
+	identitysdk "github.com/domainry/domainry-identity-sdk"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
 	reportapplication "github.com/domainry/domainry-report/internal/application/report"
@@ -303,6 +304,14 @@ func reportAuthority(r *http.Request) reportmodel.ReportAuthority {
 	parts := strings.Fields(strings.TrimSpace(r.Header.Get("Authorization")))
 	if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
 		token = parts[1]
+	}
+	// Runtime authenticates browser requests through an HttpOnly Cookie before
+	// dispatching to module-owned routes. The resolved credential stays in the
+	// server-side request context and is intentionally unavailable to browser JS.
+	if token == "" {
+		if identity, ok := identitysdk.RequestIdentityFromContext(r.Context()); ok {
+			token = strings.TrimSpace(identity.AccessToken)
+		}
 	}
 	return reportmodel.ReportAuthority{
 		AccessToken: token, RequestID: strings.TrimSpace(r.Header.Get("X-Request-ID")),

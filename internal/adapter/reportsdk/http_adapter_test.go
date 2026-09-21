@@ -11,6 +11,7 @@ import (
 
 	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulehttp"
+	identitysdk "github.com/domainry/domainry-identity-sdk"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
 	reportcontract "github.com/domainry/domainry-report/contract"
@@ -19,6 +20,23 @@ import (
 type reportHTTPQueries struct {
 	objectSQLRequest reportmodel.ReportObjectSQLRequest
 	authority        reportmodel.ReportAuthority
+}
+
+func TestReportAuthorityUsesAuthenticatedRequestIdentityWithoutBearerHeader(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/report/sales/summary", nil)
+	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{
+		Principal: identitysdk.Principal{Known: true}, AccessToken: "cookie-session-token",
+	}))
+	authority := reportAuthority(request)
+	if authority.AccessToken != "cookie-session-token" {
+		t.Fatalf("access token = %q, want server-side authenticated request token", authority.AccessToken)
+	}
+
+	request.Header.Set("Authorization", "Bearer explicit-token")
+	authority = reportAuthority(request)
+	if authority.AccessToken != "explicit-token" {
+		t.Fatalf("access token = %q, want explicit bearer token", authority.AccessToken)
+	}
 }
 
 func (*reportHTTPQueries) Summary(context.Context, reportmodel.ReportSummaryRequest, reportmodel.ReportAuthority) (reportmodel.ReportSummary, error) {
