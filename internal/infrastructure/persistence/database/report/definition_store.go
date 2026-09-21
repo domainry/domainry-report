@@ -30,12 +30,93 @@ var reportDefinitionTable = map[string]string{
 	"report_export_control":   "_report_export_controls",
 }
 
+type reportDefinitionIdentity struct {
+	objectKey     string
+	name          string
+	schemaVersion string
+	schemaHash    string
+}
+
+func normalizedReportDefinitions(snapshot reportpersistence.DefinitionSnapshot) (map[string]map[string]reportDefinitionIdentity, error) {
+	result := make(map[string]map[string]reportDefinitionIdentity, len(reportDefinitionTable))
+	for _, table := range reportDefinitionTable {
+		result[table] = map[string]reportDefinitionIdentity{}
+	}
+	for _, definition := range snapshot.Definitions {
+		table := reportDefinitionTable[strings.TrimSpace(definition.ResourceType)]
+		key := strings.TrimSpace(definition.Key)
+		if table == "" || key == "" || len(definition.Payload) == 0 {
+			return nil, fmt.Errorf("Report definition identity is invalid")
+		}
+		sum := sha256.Sum256(definition.Payload)
+		result[table][key] = reportDefinitionIdentity{
+			objectKey: strings.TrimSpace(definition.ObjectKey), name: strings.TrimSpace(definition.Name),
+			schemaVersion: snapshot.SchemaVersion, schemaHash: hex.EncodeToString(sum[:]),
+		}
+	}
+	return result, nil
+}
+
+func (s DefinitionStore) definitionsMatch(ctx context.Context, snapshot reportpersistence.DefinitionSnapshot, expected map[string]map[string]reportDefinitionIdentity) (bool, error) {
+	for _, table := range reportschema.DefinitionTables() {
+		remaining := make(map[string]reportDefinitionIdentity, len(expected[table]))
+		for key, identity := range expected[table] {
+			remaining[key] = identity
+		}
+		statement, args, err := query.NewSelectBuilder(s.dialect, table).
+			Columns("resource_key", "object_key", "name", "schema_version", "schema_hash").
+			Where(query.And(query.Equal("source_kind", snapshot.SourceKind), query.Equal("source_id", snapshot.SourceID), query.IsNull("disabled_at"))).Build()
+		if err != nil {
+			return false, err
+		}
+		rows, err := s.database.QueryContext(ctx, statement, args...)
+		if err != nil {
+			return false, err
+		}
+		matches := true
+		for rows.Next() {
+			var key string
+			var actual reportDefinitionIdentity
+			if err := rows.Scan(&key, &actual.objectKey, &actual.name, &actual.schemaVersion, &actual.schemaHash); err != nil {
+				rows.Close()
+				return false, err
+			}
+			wanted, exists := remaining[strings.TrimSpace(key)]
+			if !exists || wanted != actual {
+				matches = false
+			} else {
+				delete(remaining, strings.TrimSpace(key))
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return false, err
+		}
+		rows.Close()
+		if !matches || len(remaining) != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (s DefinitionStore) SyncDefinitions(ctx context.Context, snapshot reportpersistence.DefinitionSnapshot) error {
 	if s.database == nil || s.dialect == nil {
 		return fmt.Errorf("Report definition store is unavailable")
 	}
 	if strings.TrimSpace(snapshot.SchemaVersion) == "" || strings.TrimSpace(snapshot.SourceKind) == "" || strings.TrimSpace(snapshot.SourceID) == "" {
 		return fmt.Errorf("Report definition snapshot identity is required")
+	}
+	expected, err := normalizedReportDefinitions(snapshot)
+	if err != nil {
+		return err
+	}
+	matches, err := s.definitionsMatch(ctx, snapshot, expected)
+	if err != nil {
+		return err
+	}
+	if matches {
+		return nil
 	}
 	tx, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
@@ -57,14 +138,11 @@ func (s DefinitionStore) SyncDefinitions(ctx context.Context, snapshot reportper
 	for _, definition := range snapshot.Definitions {
 		table := reportDefinitionTable[strings.TrimSpace(definition.ResourceType)]
 		key := strings.TrimSpace(definition.Key)
-		if table == "" || key == "" || len(definition.Payload) == 0 {
-			return fmt.Errorf("Report definition identity is invalid")
-		}
-		sum := sha256.Sum256(definition.Payload)
+		identity := expected[table][key]
 		update, args, err := query.NewUpdateBuilder(s.dialect, table).
-			Set("object_key", strings.TrimSpace(definition.ObjectKey)).Set("name", strings.TrimSpace(definition.Name)).
+			Set("object_key", identity.objectKey).Set("name", identity.name).
 			Set("payload_json", definition.Payload).Set("schema_version", snapshot.SchemaVersion).
-			Set("schema_hash", hex.EncodeToString(sum[:])).Set("source_kind", snapshot.SourceKind).
+			Set("schema_hash", identity.schemaHash).Set("source_kind", snapshot.SourceKind).
 			Set("source_id", snapshot.SourceID).Set("disabled_at", nil).Set("updated_at", now).
 			Where(query.Equal("resource_key", key)).Build()
 		if err != nil {
@@ -83,7 +161,7 @@ func (s DefinitionStore) SyncDefinitions(ctx context.Context, snapshot reportper
 		}
 		statement, args, err := query.NewInsertBuilder(s.dialect, table).Columns(
 			"id", "resource_key", "object_key", "name", "payload_json", "schema_version", "schema_hash", "source_kind", "source_id", "disabled_at", "created_at", "updated_at",
-		).Values(definition.ResourceType+":"+key, key, strings.TrimSpace(definition.ObjectKey), strings.TrimSpace(definition.Name), definition.Payload, snapshot.SchemaVersion, hex.EncodeToString(sum[:]), snapshot.SourceKind, snapshot.SourceID, nil, now, now).Build()
+		).Values(definition.ResourceType+":"+key, key, identity.objectKey, identity.name, definition.Payload, snapshot.SchemaVersion, identity.schemaHash, snapshot.SourceKind, snapshot.SourceID, nil, now, now).Build()
 		if err != nil {
 			return err
 		}
