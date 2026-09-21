@@ -99,6 +99,12 @@ func reportHTTPContract() ([]modulehttp.Route, map[string]map[string]any, error)
 	return routes, operations, nil
 }
 
+// CapabilityHTTPContract returns the immutable route and OpenAPI facts used
+// by the public capability contract without opening the executable adapter.
+func CapabilityHTTPContract() ([]modulehttp.Route, map[string]map[string]any, error) {
+	return reportHTTPContract()
+}
+
 func reportOpenAPIOperationsByAction() map[string]map[string]any {
 	security := []any{map[string]any{"BearerAuth": []any{}}}
 	reportKey := map[string]any{"name": "reportKey", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}

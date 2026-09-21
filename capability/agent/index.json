@@ -1,5 +1,134 @@
-{"contract_version":"domainry-agent-guide-index-v2","owner":{"kind":"module","key":"report"},"guides":[
-  {"key":"definition_query","question":"How should an analytical definition and authorized query be designed?","path":"capability/agent/definition-query.md","problems_solved":["Gives analytical measures, dimensions, filters, result types, paging, and source authorization one reusable contract."],"business_scenarios":["Querying monthly revenue and order count grouped by region with bounded date parameters.","Calculating inventory aging, service-level performance, or other grouped metrics that ordinary Object lists cannot express."],"requirement_signals":["dashboard metric","aggregate report","measure","dimension","group by","filter","stable paging"],"use_when":["A reusable business question needs governed analytical execution"],"do_not_use_when":["An ordinary Object list answers the question"],"capability_keys":["report.definition","report.query","report.stable_paging"],"module_keys":["identity"],"related_guides":["snapshot","export"]},
-  {"key":"snapshot","question":"When should a Report use a materialized snapshot?","path":"capability/agent/snapshot.md","problems_solved":["Materializes expensive or time-stable analytical results so dashboards do not recompute large aggregates on every read."],"business_scenarios":["Publishing a weekday morning finance dashboard from the latest governed revenue snapshot.","Freezing month-end or compliance figures with an explicit as-of time and controlled refresh."],"requirement_signals":["materialized snapshot","scheduled report","snapshot","refresh","expensive aggregate","as of"],"use_when":["Analytical results need stable materialization or bounded refresh"],"do_not_use_when":["Live query meets freshness and cost requirements"],"capability_keys":["report.snapshot"],"module_keys":["scheduler"],"related_guides":["definition_query"]},
-  {"key":"export","question":"How should a Report prepare a governed offline export?","path":"capability/agent/export.md","problems_solved":["Preserves one Report definition and authorization contract when an online analytical result must become an auditable offline file."],"business_scenarios":["Finance exports monthly revenue by region using the same measures and scope as the online Report.","A large analytical result is prepared for durable CSV delivery through Data Exchange without widening row access."],"requirement_signals":["CSV export","download","artifact","audit"],"use_when":["Authorized analytical output must become a durable artifact"],"do_not_use_when":["The user only needs online stable pages"],"capability_keys":["report.export_prepare"],"module_keys":["audit","data_exchange","notification","scheduler"],"related_guides":["definition_query"]}
-]}
+{
+  "contract_version": "domainry-agent-guide-index-v3",
+  "owner": {
+    "kind": "module",
+    "key": "report"
+  },
+  "guides": [
+    {
+      "key": "definition_query",
+      "question": "How should an analytical definition and authorized query be designed?",
+      "path": "capability/agent/definition-query.md",
+      "problems_solved": [
+        "Gives analytical measures, dimensions, filters, result types, paging, and source authorization one reusable contract."
+      ],
+      "business_scenarios": [
+        "Querying monthly revenue and order count grouped by region with bounded date parameters.",
+        "Calculating inventory aging, service-level performance, or other grouped metrics that ordinary Object lists cannot express."
+      ],
+      "requirement_signals": [
+        "dashboard metric",
+        "aggregate report",
+        "measure",
+        "dimension",
+        "group by",
+        "filter",
+        "stable paging"
+      ],
+      "use_when": [
+        "A reusable business question needs governed analytical execution"
+      ],
+      "do_not_use_when": [
+        "An ordinary Object list answers the question"
+      ],
+      "related_guides": [
+        "snapshot",
+        "export"
+      ],
+      "provided_capability_keys": [
+        "report.definition",
+        "report.query"
+      ],
+      "required_capability_keys": [],
+      "embedded_capability_keys": [
+        "report.stable_paging"
+      ],
+      "required_owner_keys": [
+        "identity"
+      ],
+      "usage_kind": "authoring"
+    },
+    {
+      "key": "snapshot",
+      "question": "When should a Report use a materialized snapshot?",
+      "path": "capability/agent/snapshot.md",
+      "problems_solved": [
+        "Materializes expensive or time-stable analytical results so dashboards do not recompute large aggregates on every read."
+      ],
+      "business_scenarios": [
+        "Publishing a weekday morning finance dashboard from the latest governed revenue snapshot.",
+        "Freezing month-end or compliance figures with an explicit as-of time and controlled refresh."
+      ],
+      "requirement_signals": [
+        "materialized snapshot",
+        "scheduled report",
+        "snapshot",
+        "refresh",
+        "expensive aggregate",
+        "as of"
+      ],
+      "use_when": [
+        "Analytical results need stable materialization or bounded refresh"
+      ],
+      "do_not_use_when": [
+        "Live query meets freshness and cost requirements"
+      ],
+      "related_guides": [
+        "definition_query"
+      ],
+      "provided_capability_keys": [
+        "report.snapshot"
+      ],
+      "required_capability_keys": [
+        "scheduler.schedule"
+      ],
+      "embedded_capability_keys": [],
+      "required_owner_keys": [
+        "scheduler"
+      ],
+      "usage_kind": "hybrid"
+    },
+    {
+      "key": "export",
+      "question": "How should a Report prepare a governed offline export?",
+      "path": "capability/agent/export.md",
+      "problems_solved": [
+        "Preserves one Report definition and authorization contract when an online analytical result must become an auditable offline file."
+      ],
+      "business_scenarios": [
+        "Finance exports monthly revenue by region using the same measures and scope as the online Report.",
+        "A large analytical result is prepared for durable CSV delivery through Data Exchange without widening row access."
+      ],
+      "requirement_signals": [
+        "CSV export",
+        "download",
+        "artifact",
+        "audit"
+      ],
+      "use_when": [
+        "Authorized analytical output must become a durable artifact"
+      ],
+      "do_not_use_when": [
+        "The user only needs online stable pages"
+      ],
+      "related_guides": [
+        "definition_query"
+      ],
+      "provided_capability_keys": [
+        "report.export_prepare"
+      ],
+      "required_capability_keys": [
+        "data_exchange.canonical_artifact",
+        "data_exchange.paged_export"
+      ],
+      "embedded_capability_keys": [],
+      "required_owner_keys": [
+        "audit",
+        "data_exchange",
+        "notification",
+        "scheduler"
+      ],
+      "usage_kind": "hybrid"
+    }
+  ]
+}

@@ -8,6 +8,7 @@
 
 - Publishing a weekday morning finance dashboard from the latest governed revenue snapshot.
 - Freezing month-end or compliance figures with an explicit as-of time and controlled refresh.
+- Keeping the last successful hourly aggregate readable after a failed refresh while making its stale/failure evidence visible.
 
 ## Use when
 
@@ -32,7 +33,7 @@ Define snapshot identity, source definition version, freshness, refresh operatio
 
 ## Example
 
-A weekday 09:00 finance dashboard reads the latest governed revenue snapshot. Scheduler claims the time window; Report executes and publishes the snapshot atomically.
+An hourly revenue dashboard reads snapshot revision `2026-09-21T10:00Z`, which records Report definition/version, parameters, source scope, as-of boundary, completion time, and freshness. Scheduler may claim the 11:00 window, but Report computes and atomically replaces the published snapshot only after a complete successful result. If refresh fails, the 10:00 snapshot remains readable with `last_success_at` and failed-refresh evidence; the UI must not label it current. An as-of month-end snapshot keeps its fixed cutoff for later review. A Data Exchange Artifact is a downloadable file and does not become the query snapshot.
 
 ## Permissions and scope
 

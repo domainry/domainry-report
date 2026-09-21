@@ -8,6 +8,7 @@
 
 - Finance exports monthly revenue by region using the same measures and scope as the online Report.
 - A large analytical result is prepared for durable CSV delivery through Data Exchange without widening row access.
+- A user who only needs a few online pages stays on the stable query path and does not create a durable file.
 
 ## Use when
 
@@ -32,7 +33,7 @@ Report executes the authorized definition and prepares canonical/stable output. 
 
 ## Example
 
-Finance exports monthly revenue by region. Online and offline results use the same Report definition and scope; Data Exchange produces the CSV without widening access.
+Finance prepares `monthly_revenue_by_region` using the exact Report definition/version, typed parameters, requesting principal, row/field scope, and either a stable query boundary or named snapshot. Report returns an export source contract; Data Exchange creates the durable job, consumes stable pages, writes the canonical Artifact, records its hash/size, and exposes progress. Download uses a separate permission and expiry, while Audit correlates requester, Report, parameters, source boundary, job, Artifact, and outcome. If the user only pages through ten rows, no export job is created. `report_export_controls` is compiler/Runtime governance over this chain, not a second Report-owned business dataset.
 
 ## Permissions and scope
 

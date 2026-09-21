@@ -4,11 +4,10 @@ package capability
 
 import (
 	"github.com/domainry/domainry-foundation/modulecapability"
-	reportadapter "github.com/domainry/domainry-report/internal/adapter/reportsdk"
 )
 
 type Inputs struct{}
 
-func Open(Inputs) (*modulecapability.StaticBinding, error) {
-	return reportadapter.NewCapabilityBinding(reportadapter.ValidateCapabilityCandidate)
+func Open(inputs Inputs) (*modulecapability.StaticBinding, error) {
+	return openContract(inputs)
 }

@@ -1,4 +1,4 @@
-package reportsdk
+package capability
 
 import (
 	"bytes"
@@ -12,11 +12,12 @@ import (
 	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulecapability/contracttest"
 	reportcontract "github.com/domainry/domainry-report/contract"
+	reportadapter "github.com/domainry/domainry-report/internal/adapter/reportsdk"
 )
 
 func TestReportCapabilityTracksOwnerRoutesAndValidation(t *testing.T) {
-	binding, err := NewCapabilityBinding(func(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
-		return ValidateCapabilityCandidate(ctx, request)
+	binding, err := buildContract(func(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
+		return validateCapabilityCandidate(ctx, request)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +30,7 @@ func TestReportCapabilityTracksOwnerRoutesAndValidation(t *testing.T) {
 	if len(summary.Identity.SupportedDeploymentModes) != 1 || summary.Identity.SupportedDeploymentModes[0] != modulecapability.DeploymentModeModule {
 		t.Fatalf("Report topology=%v", summary.Identity.SupportedDeploymentModes)
 	}
-	routes, _, err := reportHTTPContract()
+	routes, _, err := reportadapter.CapabilityHTTPContract()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +68,7 @@ func TestReportCapabilityTracksOwnerRoutesAndValidation(t *testing.T) {
 }
 
 func TestReportCapabilityPublishesGovernedExportPrerequisites(t *testing.T) {
-	binding, err := NewCapabilityBinding(ValidateCapabilityCandidate)
+	binding, err := Open(Inputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestReportCapabilityPublishesGovernedExportPrerequisites(t *testing.T) {
 		t.Fatalf("capability export idempotency=%#v", extension.Idempotency)
 	}
 	prerequisites, _ := operation["x-domainry-operation-prerequisites"].(map[string]any)
-	if prerequisites["contract_version"] != reportOperationPrerequisitesContractVersion {
+	if prerequisites["contract_version"] != "domainry-report-operation-prerequisites-v1" {
 		t.Fatalf("capability export prerequisites=%#v", prerequisites)
 	}
 	codes, _ := prerequisites["error_codes"].([]any)
@@ -119,8 +120,8 @@ func TestReportCapabilityPublishesGovernedExportPrerequisites(t *testing.T) {
 }
 
 func TestReportCapabilityPreservesObjectSQLResultKindDiagnostic(t *testing.T) {
-	binding, err := NewCapabilityBinding(func(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
-		return ValidateCapabilityCandidate(ctx, request)
+	binding, err := buildContract(func(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
+		return validateCapabilityCandidate(ctx, request)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +166,7 @@ func TestReportCapabilityAcceptsSQLOnlyStructureBoundToObjectJSONRelations(t *te
 			{Collection: "objects", Key: "payment", Value: json.RawMessage(`{"key":"payment","name":"Payment","description":"Payment","fields":[{"key":"sale_id","name":"Sale","type":"relation","config":{"target":"sale","cardinality":"many_to_one"},"required":true}]}`)},
 		},
 	}
-	result, err := ValidateCapabilityCandidate(t.Context(), request)
+	result, err := validateCapabilityCandidate(t.Context(), request)
 	if err != nil || len(result.Diagnostics) != 0 {
 		t.Fatalf("diagnostics=%+v err=%v", result.Diagnostics, err)
 	}
@@ -218,7 +219,7 @@ func TestReportCapabilityAcceptsCompleteObjectLifecycleContext(t *testing.T) {
                 `, fieldKey, objectKey))},
 				ReferencedContext: []modulecapability.AuthoringFragment{{Collection: "objects", Key: objectKey, Value: test.object}},
 			}
-			result, err := ValidateCapabilityCandidate(t.Context(), request)
+			result, err := validateCapabilityCandidate(t.Context(), request)
 			if err != nil || len(result.Diagnostics) != 0 {
 				t.Fatalf("diagnostics=%+v err=%v", result.Diagnostics, err)
 			}
@@ -258,7 +259,7 @@ func TestReportCapabilityRejectsUnknownObjectContextFields(t *testing.T) {
                 `)},
 				ReferencedContext: []modulecapability.AuthoringFragment{{Collection: "objects", Key: "lead", Value: test.object}},
 			}
-			result, err := ValidateCapabilityCandidate(t.Context(), request)
+			result, err := validateCapabilityCandidate(t.Context(), request)
 			if err != nil || len(result.Diagnostics) != 1 {
 				t.Fatalf("diagnostics=%+v err=%v", result.Diagnostics, err)
 			}
@@ -285,7 +286,7 @@ func TestReportCapabilityAcceptsFieldUpgradeRuleAndSensitiveMarker(t *testing.T)
             ]
         }`)}},
 	}
-	result, err := ValidateCapabilityCandidate(t.Context(), request)
+	result, err := validateCapabilityCandidate(t.Context(), request)
 	if err != nil || len(result.Diagnostics) != 0 {
 		t.Fatalf("a field upgrade rule or sensitive marker must not invalidate the object context: diagnostics=%+v err=%v", result.Diagnostics, err)
 	}
@@ -303,7 +304,7 @@ func TestReportCapabilityLifecycleContextStillEnforcesObjectSQLFields(t *testing
             "lifecycle_policy":{"mode":"immutable_after_state","state_field":"status","immutable_states":["converted","lost"]}
 		}`)}},
 	}
-	result, err := ValidateCapabilityCandidate(t.Context(), request)
+	result, err := validateCapabilityCandidate(t.Context(), request)
 	if err != nil || len(result.Diagnostics) != 1 {
 		t.Fatalf("diagnostics=%+v err=%v", result.Diagnostics, err)
 	}
@@ -314,4 +315,24 @@ func TestReportCapabilityLifecycleContextStillEnforcesObjectSQLFields(t *testing
 		diagnostic.Params["field_key"] != "missing_amount" || diagnostic.Params["object"] != "lead" {
 		t.Fatalf("diagnostic=%+v", diagnostic)
 	}
+}
+
+func reportOpenAPIParameters(operation map[string]any) []map[string]any {
+	values, _ := operation["parameters"].([]any)
+	parameters := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		if parameter, ok := value.(map[string]any); ok {
+			parameters = append(parameters, parameter)
+		}
+	}
+	return parameters
+}
+
+func reportOpenAPIParameter(parameters []map[string]any, name string) map[string]any {
+	for _, parameter := range parameters {
+		if parameter["name"] == name {
+			return parameter
+		}
+	}
+	return nil
 }

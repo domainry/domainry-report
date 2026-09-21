@@ -1,4 +1,4 @@
-package reportsdk
+package capability
 
 import (
 	"context"
@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/domainry/domainry-foundation/modulecapability"
-	"github.com/domainry/domainry-foundation/modulehttp"
 	reportsdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
 	reportquery "github.com/domainry/domainry-report-sdk/query"
+	reportadapter "github.com/domainry/domainry-report/internal/adapter/reportsdk"
 	reportobjectsql "github.com/domainry/domainry-report/internal/domain/report/service/objectsql"
 )
 
@@ -83,8 +83,12 @@ type reportObjectFieldAuthoringFragment struct {
 	Provenance     json.RawMessage `json:"provenance,omitempty"`
 }
 
-func NewCapabilityBinding(validator modulecapability.Validator) (*modulecapability.StaticBinding, error) {
-	routes, operations, err := reportHTTPContract()
+func openContract(_ Inputs) (*modulecapability.StaticBinding, error) {
+	return buildContract(validateCapabilityCandidate)
+}
+
+func buildContract(validator modulecapability.Validator) (*modulecapability.StaticBinding, error) {
+	routes, operations, err := reportadapter.CapabilityHTTPContract()
 	if err != nil {
 		return nil, err
 	}
@@ -119,22 +123,17 @@ func NewCapabilityBinding(validator modulecapability.Validator) (*modulecapabili
 			ValidationRevision: "report-owner-validation-v1", SupportedDeploymentModes: []modulecapability.DeploymentMode{modulecapability.DeploymentModeModule},
 		},
 		Name: "Report", Description: "Source-owned report definitions, authorized analytical execution, materialized snapshots, stable paging, and governed export preparation.",
-		Scenarios: modulecapability.AdaptationScenarios{
-			UseWhen:              []string{"A PRD requires reusable analytical definitions, aggregates, grouped metrics, stable paged results, report snapshots, or governed exports"},
-			DoNotUseWhen:         []string{"The requirement is a transactional record list or detail view that can be served directly by the owning business object without analytical definition or export governance"},
-			RequirementSignals:   []string{"dashboard metric", "aggregate report", "group by", "materialized snapshot", "scheduled report", "CSV export", "cross-workspace aggregate"},
+		Composition: modulecapability.ModuleComposition{
 			ProvidedCapabilities: []string{"report.definition", "report.query", "report.snapshot", "report.stable_paging", "report.export_prepare"},
 			RequiredModules:      []string{"identity"}, OptionalModules: []string{"audit", "data_exchange", "notification", "scheduler"}, ConflictingModules: []string{},
-			AssemblyChains:    []string{"identity_scope_to_report_execution", "scheduler_to_report_snapshot_refresh", "report_export_to_data_exchange_job", "report_result_to_notification_delivery"},
-			ValidationScopes:  []string{"report.definition"},
-			SelectionExamples: []modulecapability.ScenarioExample{{Requirement: "Finance needs a role-scoped monthly revenue summary and an audited CSV export", Reason: "Report owns analytical definitions and governed export preparation; Data Exchange can assemble artifact delivery"}},
-			RejectionExamples: []modulecapability.ScenarioExample{{Requirement: "Show the current customer's latest five orders", Reason: "A normal business-object query is sufficient unless reusable analytical or export semantics are required"}},
+			AssemblyChains:   []string{"identity_scope_to_report_execution", "scheduler_to_report_snapshot_refresh", "report_export_to_data_exchange_job", "report_result_to_notification_delivery"},
+			ValidationScopes: []string{"report.definition"},
 		},
 	}
 	return modulecapability.NewStaticBinding(summary, []modulecapability.CategoryDocument{document}, validator)
 }
 
-func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
+func validateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
 	result := modulecapability.ValidationResult{Diagnostics: []modulecapability.Diagnostic{}}
 	invalidWithParams := func(rule, field string, err error, params map[string]string) (modulecapability.ValidationResult, error) {
 		message := "Report candidate is invalid"
@@ -297,5 +296,3 @@ func reportConfigInt(config map[string]any, key string) int {
 		return 0
 	}
 }
-
-var _ modulehttp.Adapter = (*reportHTTPAdapter)(nil)
