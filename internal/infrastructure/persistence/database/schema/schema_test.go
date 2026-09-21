@@ -27,5 +27,8 @@ func TestReportOwnsAllDefinitionAndSnapshotTablesAcrossDialects(t *testing.T) {
 		if driver == "mysql" && (!strings.Contains(joined, "information_schema.statistics") || !strings.Contains(joined, "PREPARE domainry_report_index_stmt")) {
 			t.Fatalf("MySQL adoption-safe index migration missing: %s", joined)
 		}
+		if driver == "mysql" && !strings.Contains(joined, "`refreshed_at` VARCHAR(40) NOT NULL") {
+			t.Fatalf("MySQL latest-snapshot cursor must use a bounded key column: %s", joined)
+		}
 	}
 }

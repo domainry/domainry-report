@@ -93,7 +93,7 @@ func reportSnapshotTable(renderer modulehost.Dialect) *ormschema.TableBuilder {
 		required("summary_json", ormschema.LongText()), required("watermark", ormschema.TextKey(255)),
 		required("source_versions_json", ormschema.LongText()), required("row_count", ormschema.BigInt()),
 		required("source_row_count", ormschema.BigInt()), required("started_at", ormschema.TextKey(255)),
-		required("refreshed_at", ormschema.TextKey(255)), required("error_code", ormschema.TextKey(255)),
+		required("refreshed_at", ormschema.TextKey(40)), required("error_code", ormschema.TextKey(255)),
 		required("lease_owner", ormschema.TextKey(255)), required("lease_expires_at", ormschema.TextKey(255)),
 		required("fencing_token", ormschema.BigInt()),
 	).PrimaryKey("id").Unique("workspace_id", "id").Unique("workspace_id", "report_key", "access_scope_hash", "idempotency_key")
