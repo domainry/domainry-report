@@ -5,10 +5,11 @@ go 1.26.0
 require (
 	github.com/domainry/domainry-foundation v0.1.2
 	github.com/domainry/domainry-identity-sdk v0.1.14
+	github.com/domainry/domainry-metadata v0.1.12
 	github.com/domainry/domainry-metadata-sdk v0.1.4
 	github.com/domainry/domainry-notification-sdk v0.1.3
 	github.com/domainry/domainry-orm v0.1.30
-	github.com/domainry/domainry-report-sdk v0.1.12
+	github.com/domainry/domainry-report-sdk v0.1.13
 	github.com/shopspring/decimal v1.4.0
 	modernc.org/sqlite v1.57.0
 )
@@ -22,10 +23,8 @@ require (
 	github.com/planetscale/vtprotobuf v0.6.1-0.20250313105119-ba97887b0a25 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
-	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
-	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.82.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect

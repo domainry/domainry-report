@@ -16,7 +16,6 @@ import (
 	"time"
 
 	identitysdk "github.com/domainry/domainry-identity-sdk"
-	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	notificationmodel "github.com/domainry/domainry-notification-sdk/contract"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormmigration "github.com/domainry/domainry-orm/migration"
@@ -38,7 +37,6 @@ type integrationHost struct {
 	dialect             modulehost.Dialect
 	registrar           *integrationMigrationRegistrar
 	snapshots           reportpersistence.SnapshotRepository
-	definitions         *integrationDefinitionStore
 	failNextExport      atomic.Bool
 	objectSQLExecutions atomic.Int64
 }
@@ -54,8 +52,7 @@ func (h *integrationHost) Dialect() modulehost.Dialect { return h.dialect }
 func (h *integrationHost) Migrations() modulehost.MigrationRegistrar {
 	return h.registrar
 }
-func (h *integrationHost) DefinitionStore() metadatasdk.DefinitionStore { return h.definitions }
-func (h *integrationHost) ReportSubjects() modulehost.SubjectResolver   { return h }
+func (h *integrationHost) ReportSubjects() modulehost.SubjectResolver { return h }
 func (h *integrationHost) ReportObjectSQL() modulehost.ObjectSQLExecutor {
 	return h
 }
@@ -78,80 +75,6 @@ func (*integrationHost) ReportClock() func() time.Time {
 type integrationMigrationCall struct {
 	owner      string
 	migrations []modulehost.SchemaMigration
-}
-
-type integrationDefinitionStore struct {
-	mu     sync.RWMutex
-	values []metadatasdk.Definition
-}
-
-func (s *integrationDefinitionStore) List(_ context.Context, query metadatasdk.DefinitionQuery) ([]metadatasdk.Definition, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	values := []metadatasdk.Definition{}
-	for _, value := range s.values {
-		if query.Owner != "" && value.Owner != query.Owner {
-			continue
-		}
-		if query.ResourceType != "" && value.ResourceType != query.ResourceType {
-			continue
-		}
-		if query.SourceID != "" && value.SourceID != query.SourceID {
-			continue
-		}
-		values = append(values, value)
-	}
-	return values, nil
-}
-
-func (s *integrationDefinitionStore) Get(_ context.Context, owner, resourceType, key string) (metadatasdk.Definition, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, value := range s.values {
-		if value.Owner == owner && value.ResourceType == resourceType && value.ResourceKey == key && value.Status == "active" {
-			return value, true, nil
-		}
-	}
-	return metadatasdk.Definition{}, false, nil
-}
-
-func (s *integrationDefinitionStore) Snapshot(ctx context.Context, query metadatasdk.DefinitionQuery) (metadatasdk.DefinitionSnapshot, error) {
-	values, err := s.List(ctx, query)
-	return metadatasdk.DefinitionSnapshot{Definitions: values}, err
-}
-
-func (s *integrationDefinitionStore) ReplaceSourceSnapshot(_ context.Context, snapshot metadatasdk.ProjectionSnapshot) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	retained := make([]metadatasdk.Definition, 0, len(s.values)+len(snapshot.Definitions))
-	for _, value := range s.values {
-		if value.Owner != snapshot.Owner || value.SourceKind != snapshot.SourceKind || value.SourceID != snapshot.SourceID {
-			retained = append(retained, value)
-		}
-	}
-	for _, value := range snapshot.Definitions {
-		hash := sha256.Sum256(value.Payload)
-		value.Owner = snapshot.Owner
-		value.SchemaVersion = snapshot.SchemaVersion
-		value.SchemaHash = hex.EncodeToString(hash[:])
-		value.SourceKind = snapshot.SourceKind
-		value.SourceID = snapshot.SourceID
-		value.Status = "active"
-		value.CurrentVersionID = "definition-version:" + value.SchemaHash[:32]
-		retained = append(retained, value)
-	}
-	s.values = retained
-	return nil
-}
-
-func (*integrationDefinitionStore) Publish(context.Context, metadatasdk.DefinitionPublishCommand) (metadatasdk.DefinitionPublishResult, error) {
-	return metadatasdk.DefinitionPublishResult{}, fmt.Errorf("integration Definition publication is not configured")
-}
-func (*integrationDefinitionStore) Disable(context.Context, metadatasdk.DefinitionDisableCommand) error {
-	return fmt.Errorf("integration Definition disable is not configured")
-}
-func (*integrationDefinitionStore) GetVersion(context.Context, metadatasdk.DefinitionVersionQuery) (metadatasdk.DefinitionVersion, bool, error) {
-	return metadatasdk.DefinitionVersion{}, false, nil
 }
 
 // integrationMigrationRegistrar models the host-owned, owner-qualified
@@ -588,7 +511,7 @@ func newIntegrationHost(t *testing.T) *integrationHost {
 			t.Fatal(err)
 		}
 	}
-	host := &integrationHost{db: database, dialect: renderer, definitions: &integrationDefinitionStore{}}
+	host := &integrationHost{db: database, dialect: renderer}
 	host.registrar = &integrationMigrationRegistrar{db: database, dialect: renderer}
 	for _, sale := range []struct{ workspaceID, id, region, status, amount string }{
 		{"workspace-a", "a-1", "north", "paid", "0.10"},
@@ -718,12 +641,12 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 
 	t.Run("host registrar and sole migration ledger", func(t *testing.T) {
 		calls := host.registrar.recordedCalls()
-		if len(calls) != 1 || calls[0].owner != "report" || len(calls[0].migrations) != 1 || calls[0].migrations[0].Name != "report_foundation" {
+		if len(calls) != 2 || calls[0].owner != "report" || len(calls[0].migrations) != 1 || calls[0].migrations[0].Name != "report_foundation" || calls[1].owner != "metadata" {
 			t.Fatalf("migration calls=%#v", calls)
 		}
 		var path, kind string
 		var dirty bool
-		if err := host.db.QueryRowContext(t.Context(), "SELECT path, kind, dirty FROM _schema_migrations").Scan(&path, &kind, &dirty); err != nil {
+		if err := host.db.QueryRowContext(t.Context(), "SELECT path, kind, dirty FROM _schema_migrations WHERE kind='module:report'").Scan(&path, &kind, &dirty); err != nil {
 			t.Fatal(err)
 		}
 		if path != "module_report_000001_report_foundation" || kind != "module:report" || dirty {
