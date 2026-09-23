@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	shareddefinition "github.com/domainry/domainry-foundation/definition"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	notificationmodel "github.com/domainry/domainry-notification-sdk/contract"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
@@ -641,7 +642,7 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 
 	t.Run("host registrar and sole migration ledger", func(t *testing.T) {
 		calls := host.registrar.recordedCalls()
-		if len(calls) != 2 || calls[0].owner != "report" || len(calls[0].migrations) != 1 || calls[0].migrations[0].Name != "report_foundation" || calls[1].owner != "metadata" {
+		if len(calls) != 2 || calls[0].owner != "report" || len(calls[0].migrations) != 1 || calls[0].migrations[0].Name != "report_foundation" || calls[1].owner != shareddefinition.MigrationOwner {
 			t.Fatalf("migration calls=%#v", calls)
 		}
 		var path, kind string
