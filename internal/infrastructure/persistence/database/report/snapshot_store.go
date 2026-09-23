@@ -12,6 +12,7 @@ import (
 	"github.com/domainry/domainry-orm/query"
 	"github.com/domainry/domainry-report-sdk/modulehost"
 	reportpersistence "github.com/domainry/domainry-report-sdk/persistence"
+	reportschema "github.com/domainry/domainry-report/internal/infrastructure/persistence/database/schema"
 )
 
 var _ reportpersistence.SnapshotRepository = (*ReportSnapshotStore)(nil)
@@ -38,7 +39,7 @@ func (s *ReportSnapshotStore) Claim(ctx context.Context, request reportpersisten
 			return reportSnapshotClaim(current, reportpersistence.SnapshotClaimRunning), nil
 		}
 		claimable := query.Or(query.Equal("status", "failed"), query.And(query.Equal("status", "refreshing"), query.LessThanOrEqual("lease_expires_at", request.StartedAt)))
-		queryValue, args, buildErr := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), "_report_snapshots", request.WorkspaceID).Set("status", "refreshing").Set("started_at", request.StartedAt).Set("error_code", "").Set("lease_owner", request.LeaseOwner).Set("lease_expires_at", request.LeaseExpiresAt).SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).Where(query.And(query.Equal("id", current.ID), claimable)).Build()
+		queryValue, args, buildErr := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Set("status", "refreshing").Set("started_at", request.StartedAt).Set("error_code", "").Set("lease_owner", request.LeaseOwner).Set("lease_expires_at", request.LeaseExpiresAt).SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).Where(query.And(query.Equal("id", current.ID), claimable)).Build()
 		if buildErr != nil {
 			return reportpersistence.SnapshotClaim{}, buildErr
 		}
@@ -69,7 +70,7 @@ func (s *ReportSnapshotStore) Claim(ctx context.Context, request reportpersisten
 		return reportSnapshotInactiveClaim(claimed), nil
 	}
 	id := reportSnapshotID(request)
-	queryValue, args, buildErr := query.NewWorkspaceInsertBuilder(s.host.Dialect(), "_report_snapshots", request.WorkspaceID).Columns("id", "report_key", "access_scope_hash", "idempotency_key", "status", "summary_json", "watermark", "source_versions_json", "row_count", "source_row_count", "started_at", "refreshed_at", "error_code", "lease_owner", "lease_expires_at", "fencing_token").Values(id, request.ReportKey, request.AccessScopeHash, request.IdempotencyKey, "refreshing", "{}", "", "{}", 0, 0, request.StartedAt, "", "", request.LeaseOwner, request.LeaseExpiresAt, 1).Build()
+	queryValue, args, buildErr := query.NewWorkspaceInsertBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Columns("id", "report_key", "access_scope_hash", "idempotency_key", "status", "summary_json", "watermark", "source_versions_json", "row_count", "source_row_count", "started_at", "refreshed_at", "error_code", "lease_owner", "lease_expires_at", "fencing_token").Values(id, request.ReportKey, request.AccessScopeHash, request.IdempotencyKey, "refreshing", "{}", "", "{}", 0, 0, request.StartedAt, "", "", request.LeaseOwner, request.LeaseExpiresAt, 1).Build()
 	if buildErr != nil {
 		return reportpersistence.SnapshotClaim{}, buildErr
 	}
@@ -111,7 +112,7 @@ func (s *ReportSnapshotStore) Complete(ctx context.Context, request reportpersis
 		return fmt.Errorf("decode Report snapshot summary: %w", err)
 	}
 	versionsJSON, _ := json.Marshal(request.Snapshot.SourceVersions)
-	builder := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), "_report_snapshots", request.Snapshot.WorkspaceID)
+	builder := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.Snapshot.WorkspaceID)
 	queryValue, args, buildErr := builder.Set("status", "succeeded").Set("summary_json", string(summaryJSON)).Set("watermark", request.Snapshot.Watermark).Set("source_versions_json", string(versionsJSON)).Set("row_count", counts.RowCount).Set("source_row_count", counts.SourceRowCount).Set("refreshed_at", request.Snapshot.RefreshedAt).Set("error_code", "").Set("lease_owner", "").Set("lease_expires_at", "").Where(reportSnapshotFencePredicate(request.Snapshot.ID, request.ExpectedStatus, request.LeaseOwner, request.FencingToken)).Build()
 	if buildErr != nil {
 		return buildErr
@@ -127,7 +128,7 @@ func (s *ReportSnapshotStore) Fail(ctx context.Context, request reportpersistenc
 	if strings.TrimSpace(request.WorkspaceID) == "" {
 		return fmt.Errorf("report snapshot workspace is required")
 	}
-	queryValue, args, buildErr := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), "_report_snapshots", request.WorkspaceID).Set("status", "failed").Set("error_code", request.ErrorCode).Set("lease_owner", "").Set("lease_expires_at", "").Where(reportSnapshotFencePredicate(request.ID, request.ExpectedStatus, request.LeaseOwner, request.FencingToken)).Build()
+	queryValue, args, buildErr := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Set("status", "failed").Set("error_code", request.ErrorCode).Set("lease_owner", "").Set("lease_expires_at", "").Where(reportSnapshotFencePredicate(request.ID, request.ExpectedStatus, request.LeaseOwner, request.FencingToken)).Build()
 	if buildErr != nil {
 		return buildErr
 	}
@@ -143,7 +144,7 @@ func (s *ReportSnapshotStore) executor(ctx context.Context) modulehost.DBTX {
 }
 
 func (s *ReportSnapshotStore) Latest(ctx context.Context, workspaceID, reportKey, scopeHash string) (reportpersistence.Snapshot, bool, error) {
-	queryValue, args, buildErr := query.NewWorkspaceSelectBuilder(s.host.Dialect(), "_report_snapshots", workspaceID).Columns(reportSnapshotStoreColumns()...).Where(query.And(query.Equal("report_key", reportKey), query.Equal("access_scope_hash", scopeHash), query.Equal("status", "succeeded"))).OrderBy(query.Descending("refreshed_at"), query.Descending("id")).Limit(1).Build()
+	queryValue, args, buildErr := query.NewWorkspaceSelectBuilder(s.host.Dialect(), reportschema.SnapshotTableName, workspaceID).Columns(reportSnapshotStoreColumns()...).Where(query.And(query.Equal("report_key", reportKey), query.Equal("access_scope_hash", scopeHash), query.Equal("status", "succeeded"))).OrderBy(query.Descending("refreshed_at"), query.Descending("id")).Limit(1).Build()
 	if buildErr != nil {
 		return reportpersistence.Snapshot{}, false, buildErr
 	}
@@ -151,7 +152,7 @@ func (s *ReportSnapshotStore) Latest(ctx context.Context, workspaceID, reportKey
 }
 
 func (s *ReportSnapshotStore) reportSnapshotByIdempotency(ctx context.Context, request reportpersistence.SnapshotBeginRequest) (reportpersistence.Snapshot, bool, error) {
-	queryValue, args, buildErr := query.NewWorkspaceSelectBuilder(s.host.Dialect(), "_report_snapshots", request.WorkspaceID).Columns(reportSnapshotStoreColumns()...).Where(query.And(query.Equal("report_key", request.ReportKey), query.Equal("access_scope_hash", request.AccessScopeHash), query.Equal("idempotency_key", request.IdempotencyKey))).Limit(1).Build()
+	queryValue, args, buildErr := query.NewWorkspaceSelectBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Columns(reportSnapshotStoreColumns()...).Where(query.And(query.Equal("report_key", request.ReportKey), query.Equal("access_scope_hash", request.AccessScopeHash), query.Equal("idempotency_key", request.IdempotencyKey))).Limit(1).Build()
 	if buildErr != nil {
 		return reportpersistence.Snapshot{}, false, buildErr
 	}

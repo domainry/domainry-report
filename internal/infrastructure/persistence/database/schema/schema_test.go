@@ -1,9 +1,51 @@
 package schema
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/domainry/domainry-foundation/schemaownership"
 )
+
+func TestSchemaOwnershipMatchesEveryFreshReportTableAndPrimaryKey(t *testing.T) {
+	tables := SchemaOwnership()
+	if err := schemaownership.ValidateAll(tables); err != nil {
+		t.Fatal(err)
+	}
+	statements, err := Statements("sqlite", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := map[string]string{}
+	for _, statement := range statements {
+		const prefix = `CREATE TABLE IF NOT EXISTS "`
+		if !strings.HasPrefix(statement, prefix) {
+			continue
+		}
+		name, _, found := strings.Cut(strings.TrimPrefix(statement, prefix), `"`)
+		if !found || name == "" {
+			t.Fatalf("invalid CREATE TABLE statement: %s", statement)
+		}
+		created[name] = statement
+	}
+	if len(created) != len(tables) || !slices.Equal(OwnedTables(), schemaownership.Names(tables)) {
+		t.Fatalf("fresh Report tables=%v ownership=%+v", created, tables)
+	}
+	for _, table := range tables {
+		statement, found := created[table.Name]
+		if !found {
+			t.Fatalf("Report table %s has ownership but no canonical DDL", table.Name)
+		}
+		quoted := make([]string, len(table.PrimaryKey))
+		for index, column := range table.PrimaryKey {
+			quoted[index] = `"` + column + `"`
+		}
+		if primaryKey := "PRIMARY KEY (" + strings.Join(quoted, ", ") + ")"; !strings.Contains(statement, primaryKey) {
+			t.Fatalf("Report table %s ownership primary key %v does not match DDL: %s", table.Name, table.PrimaryKey, statement)
+		}
+	}
+}
 
 func TestReportOwnsOnlySnapshotTableAcrossDialects(t *testing.T) {
 	for _, driver := range []string{"sqlite", "postgres", "mysql"} {

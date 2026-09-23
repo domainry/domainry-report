@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	shareddefinition "github.com/domainry/domainry-foundation/definition"
+	"github.com/domainry/domainry-foundation/schemaownership"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	notificationmodel "github.com/domainry/domainry-notification-sdk/contract"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
@@ -30,6 +32,19 @@ import (
 	"github.com/shopspring/decimal"
 	_ "modernc.org/sqlite"
 )
+
+func TestModulePublishesOnlyReportOwnedSchema(t *testing.T) {
+	tables := reportmodule.SchemaOwnership()
+	if err := schemaownership.ValidateAll(tables); err != nil {
+		t.Fatal(err)
+	}
+	if len(tables) != 1 || !slices.Equal(reportmodule.OwnedTables(), schemaownership.Names(tables)) {
+		t.Fatalf("Report schema ownership=%d tables=%v", len(tables), reportmodule.OwnedTables())
+	}
+	if tables[0].Owner != "report" || tables[0].Name != "_report_snapshots" {
+		t.Fatalf("Report Module claimed foreign table: %+v", tables[0])
+	}
+}
 
 type integrationTransactionKey struct{}
 

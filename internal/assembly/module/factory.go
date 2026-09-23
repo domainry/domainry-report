@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	shareddefinition "github.com/domainry/domainry-foundation/definition"
+	"github.com/domainry/domainry-foundation/schemaownership"
 	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	reportsdk "github.com/domainry/domainry-report-sdk"
 	"github.com/domainry/domainry-report-sdk/modulehost"
@@ -18,6 +19,10 @@ type Factory struct{}
 
 func NewFactory() *Factory { return &Factory{} }
 
+func SchemaOwnership() []schemaownership.Table { return reportmigration.SchemaOwnership() }
+
+func OwnedTables() []string { return reportmigration.OwnedTables() }
+
 func (*Factory) Open(ctx context.Context, application reportsdk.ApplicationRef, host modulehost.Host) (reportsdk.Binding, error) {
 	if err := application.Validate(); err != nil {
 		return nil, err
@@ -29,7 +34,7 @@ func (*Factory) Open(ctx context.Context, application reportsdk.ApplicationRef, 
 	if err != nil {
 		return nil, err
 	}
-	if err := host.Migrations().ApplyOwnedMigrations(ctx, "report", migrations); err != nil {
+	if err := host.Migrations().ApplyOwnedMigrations(ctx, reportmigration.MigrationOwner, migrations); err != nil {
 		return nil, fmt.Errorf("apply Report Module migrations: %w", err)
 	}
 	definitionKernel, err := shareddefinition.Open(ctx, application.RuntimeID, host.Database(), host.Dialect(), host.Migrations())
