@@ -2,7 +2,6 @@ package reportsdk
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
@@ -24,13 +23,9 @@ func (r *definitionProviderRepository) DefinitionSnapshot(context.Context) (repo
 func TestStoredDefinitionProviderIsReportReadAuthority(t *testing.T) {
 	report := reportmodel.ReportSchema{Key: "sales", Name: "Sales"}
 	control := reportmodel.ReportExportControlSchema{Key: "sales-export", ReportKey: "sales", SourceObjects: []string{"order"}}
-	reportJSON, _ := json.Marshal(report)
-	controlJSON, _ := json.Marshal(control)
-	provider := storedDefinitionProvider{repository: &definitionProviderRepository{snapshot: reportpersistence.DefinitionSnapshot{Definitions: []reportpersistence.Definition{
-		{ResourceType: "report", Key: report.Key, Payload: reportJSON},
-		{ResourceType: "report_export_control", Key: control.Key, Payload: controlJSON},
-		{ResourceType: "sensitive_field_policy", Key: "ignored", Payload: json.RawMessage(`{"key":"ignored"}`)},
-	}}}}
+	provider := storedDefinitionProvider{repository: &definitionProviderRepository{snapshot: reportpersistence.DefinitionSnapshot{Definitions: []reportmodel.ReportDefinitionSchema{{
+		Report: report, ExportControls: []reportmodel.ReportExportControlSchema{control},
+	}}}}}
 	reports, err := provider.ReportDefinitions(t.Context())
 	if err != nil || len(reports) != 1 || reports[0].Key != report.Key {
 		t.Fatalf("reports=%#v err=%v", reports, err)

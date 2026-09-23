@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	actioncontract "github.com/domainry/domainry-foundation/action"
-	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	sdk "github.com/domainry/domainry-report-sdk"
 	"github.com/domainry/domainry-report-sdk/modulehost"
@@ -15,30 +14,16 @@ import (
 )
 
 type Binding struct {
-	service    reportapplication.Service
-	mu         sync.RWMutex
-	queries    sdk.Queries
-	snapshots  sdk.SnapshotCommands
-	exports    sdk.Exports
-	adapters   []modulehttp.Adapter
-	capability modulecapability.Binding
+	service   reportapplication.Service
+	mu        sync.RWMutex
+	queries   sdk.Queries
+	snapshots sdk.SnapshotCommands
+	exports   sdk.Exports
+	adapters  []modulehttp.Adapter
 }
 
-func NewBinding(service reportapplication.Service, capability modulecapability.Binding) (*Binding, error) {
-	if capability == nil {
-		return nil, fmt.Errorf("Report capability binding is required")
-	}
-	return &Binding{service: service, capability: capability}, nil
-}
-
-func (b *Binding) CapabilitySummary(ctx context.Context) (modulecapability.ModuleSummary, error) {
-	return b.capability.CapabilitySummary(ctx)
-}
-func (b *Binding) CapabilityCategory(ctx context.Context, key string) (modulecapability.CategoryDocument, error) {
-	return b.capability.CapabilityCategory(ctx, key)
-}
-func (b *Binding) ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
-	return b.capability.ValidateCapabilityCandidate(ctx, request)
+func NewBinding(service reportapplication.Service) (*Binding, error) {
+	return &Binding{service: service}, nil
 }
 
 func (*Binding) Descriptor() sdk.Descriptor {

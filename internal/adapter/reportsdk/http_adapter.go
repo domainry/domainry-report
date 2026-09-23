@@ -19,18 +19,17 @@ import (
 )
 
 type reportHTTPAdapter struct {
-	binding    *Binding
-	handler    http.Handler
-	routes     []modulehttp.Route
-	operations map[string]map[string]any
+	binding *Binding
+	handler http.Handler
+	routes  []modulehttp.Route
 }
 
 func newReportHTTPAdapter(binding *Binding) (*reportHTTPAdapter, error) {
-	routes, operations, err := reportHTTPContract()
+	routes, err := reportHTTPContract()
 	if err != nil {
 		return nil, err
 	}
-	adapter := &reportHTTPAdapter{binding: binding, routes: routes, operations: operations}
+	adapter := &reportHTTPAdapter{binding: binding, routes: routes}
 	mux := http.NewServeMux()
 	handlers := adapter.handlers()
 	for _, route := range routes {
@@ -63,85 +62,29 @@ func (s *reportHTTPAdapter) Routes() []modulehttp.Route {
 	return append([]modulehttp.Route(nil), s.routes...)
 }
 
-func (s *reportHTTPAdapter) OpenAPIOperations() map[string]map[string]any {
-	return s.operations
-}
-
-func reportHTTPContract() ([]modulehttp.Route, map[string]map[string]any, error) {
+func reportHTTPContract() ([]modulehttp.Route, error) {
 	definitions, err := reportapplication.AuthorizationActions()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	byAction := reportOpenAPIOperationsByAction()
 	routes := make([]modulehttp.Route, 0, len(definitions))
-	operations := make(map[string]map[string]any, len(definitions))
 	for _, definition := range definitions {
 		if definition.HTTP == nil {
 			continue
 		}
 		route, err := modulehttp.RouteFromAction(definition)
 		if err != nil {
-			return nil, nil, fmt.Errorf("project Report Action %q: %w", definition.Key, err)
-		}
-		operation, found := byAction[definition.Key]
-		if !found {
-			return nil, nil, fmt.Errorf("Report Action %q has no OpenAPI operation", definition.Key)
-		}
-		if err := applyReportOperationPrerequisites(operation, definition); err != nil {
-			return nil, nil, err
+			return nil, fmt.Errorf("project Report Action %q: %w", definition.Key, err)
 		}
 		routes = append(routes, route)
-		operations[route.Pattern()] = operation
-		delete(byAction, definition.Key)
 	}
-	if len(byAction) != 0 {
-		return nil, nil, fmt.Errorf("Report OpenAPI operations have no Action manifest entries")
-	}
-	return routes, operations, nil
+	return routes, nil
 }
 
-// CapabilityHTTPContract returns the immutable route and OpenAPI facts used
-// by the public capability contract without opening the executable adapter.
-func CapabilityHTTPContract() ([]modulehttp.Route, map[string]map[string]any, error) {
+// CapabilityRoutes returns the source-owned typed route catalog without
+// opening the executable adapter.
+func CapabilityRoutes() ([]modulehttp.Route, error) {
 	return reportHTTPContract()
-}
-
-func reportOpenAPIOperationsByAction() map[string]map[string]any {
-	security := []any{map[string]any{"BearerAuth": []any{}}}
-	reportKey := map[string]any{"name": "reportKey", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}
-	pathParameter := func(name string) map[string]any {
-		return map[string]any{"name": name, "in": "path", "required": true, "schema": map[string]any{"type": "string"}}
-	}
-	queryParameter := func(name string, schema map[string]any) map[string]any {
-		return map[string]any{"name": name, "in": "query", "required": false, "schema": schema}
-	}
-	return map[string]map[string]any{
-		sdk.ActionReportSummaryGet: {
-			"operationId": "getReportSummary", "tags": []string{"Reports"}, "summary": "Execute an authorized report summary",
-			"security": security, "parameters": []any{
-				reportKey,
-				queryParameter("mode", map[string]any{"type": "string", "enum": []string{"realtime", "snapshot"}}),
-				queryParameter("query_key", map[string]any{"type": "string"}),
-				queryParameter("tags", map[string]any{"type": "array", "items": map[string]any{"type": "string"}}),
-				queryParameter("page_size", map[string]any{"type": "integer", "minimum": 1, "maximum": reportmodel.ReportPageMaximumSize}),
-				queryParameter("cursor", map[string]any{"type": "string"}),
-			}, "responses": standardOpenAPIResponses("200", "Report summary", reportSummaryOpenAPISchema()),
-		},
-		sdk.ActionReportQueryExecute: {
-			"operationId": "queryReportObjectSQL", "tags": []string{"Reports"}, "summary": "Execute an authored Object SQL report with typed parameters",
-			"security": security, "parameters": []any{reportKey}, "requestBody": jsonRequestBody(map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"parameters": reportObjectSQLParametersOpenAPISchema(), "page_size": map[string]any{"type": "integer", "minimum": 1, "maximum": reportmodel.ReportPageMaximumSize}, "cursor": map[string]any{"type": "string"}}}), "responses": standardOpenAPIResponses("200", "Report summary", reportSummaryOpenAPISchema()),
-		},
-		sdk.ActionReportSnapshotsRefresh: {
-			"operationId": "refreshReportSnapshot", "tags": []string{"Reports"}, "summary": "Refresh a materialized report snapshot",
-			"security": security, "parameters": []any{reportKey}, "responses": standardOpenAPIResponses("200", "Report snapshot", reportSnapshotOpenAPISchema()),
-		},
-		sdk.ActionReportExportsPrepare: {
-			"operationId": "prepareReportExport", "tags": []string{"Reports"}, "summary": "Prepare a governed report export",
-			"security": security, "parameters": []any{reportKey, pathParameter("objectKey")},
-			"requestBody": jsonRequestBody(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"audit_id", "scope"}, "properties": map[string]any{"audit_id": map[string]any{"type": "string"}, "retry_of_job_id": map[string]any{"type": "string", "description": "Failed predecessor job ID for one new, freshly authorized attempt; the original job remains unchanged."}, "scope": reportExportScopeOpenAPISchema()}}),
-			"responses":   reportExportPrepareOpenAPIResponses(),
-		},
-	}
 }
 
 func (s *reportHTTPAdapter) handlers() map[string]http.HandlerFunc {
@@ -151,36 +94,6 @@ func (s *reportHTTPAdapter) handlers() map[string]http.HandlerFunc {
 		sdk.ActionReportSnapshotsRefresh: s.refreshSnapshot,
 		sdk.ActionReportExportsPrepare:   s.prepareExport,
 	}
-}
-
-func standardOpenAPIResponses(status, description string, schema map[string]any) map[string]any {
-	return map[string]any{
-		status: map[string]any{"description": description, "content": map[string]any{"application/json": map[string]any{"schema": schema}}},
-		"400":  reportOpenAPIErrorResponse("Invalid request"), "401": reportOpenAPIErrorResponse("Authentication required"),
-		"403": reportOpenAPIErrorResponse("Forbidden"), "404": reportOpenAPIErrorResponse("Report not found"), "409": reportOpenAPIErrorResponse("Report state conflict"),
-		"default": reportOpenAPIErrorResponse(),
-	}
-}
-
-func reportExportPrepareOpenAPIResponses() map[string]any {
-	responses := standardOpenAPIResponses("202", "Accepted asynchronous report export job", reportExportJobOpenAPISchema())
-	responses["200"] = map[string]any{
-		"description": "Completed bounded report export",
-		"content":     map[string]any{"text/csv": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}},
-	}
-	return responses
-}
-
-func reportOpenAPIErrorResponse(descriptions ...string) map[string]any {
-	description := "Error"
-	if len(descriptions) != 0 && strings.TrimSpace(descriptions[0]) != "" {
-		description = strings.TrimSpace(descriptions[0])
-	}
-	return map[string]any{"description": description, "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Error"}}}}
-}
-
-func jsonRequestBody(schema map[string]any) map[string]any {
-	return map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": schema}}}
 }
 
 func (b *Binding) HTTPAdapters() []modulehttp.Adapter {
@@ -376,5 +289,4 @@ func writeReportError(w http.ResponseWriter, err error) {
 }
 
 var _ modulehttp.Adapter = (*reportHTTPAdapter)(nil)
-var _ modulehttp.OpenAPIProvider = (*reportHTTPAdapter)(nil)
 var _ modulehttp.Provider = (*Binding)(nil)

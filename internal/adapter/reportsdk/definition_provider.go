@@ -2,7 +2,6 @@ package reportsdk
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -27,15 +26,9 @@ func (p storedDefinitionProvider) ReportDefinitions(ctx context.Context) ([]repo
 	}
 	reports := make([]reportmodel.ReportSchema, 0, len(snapshot.Definitions))
 	for _, definition := range snapshot.Definitions {
-		if strings.TrimSpace(definition.ResourceType) != "report" {
-			continue
-		}
-		var report reportmodel.ReportSchema
-		if err := json.Unmarshal(definition.Payload, &report); err != nil {
-			return nil, fmt.Errorf("decode Report definition %q: %w", definition.Key, err)
-		}
-		if strings.TrimSpace(report.Key) == "" || strings.TrimSpace(report.Key) != strings.TrimSpace(definition.Key) {
-			return nil, fmt.Errorf("Report definition %q has inconsistent payload identity", definition.Key)
+		report := definition.Report
+		if strings.TrimSpace(report.Key) == "" {
+			return nil, fmt.Errorf("Report definition key is required")
 		}
 		reports = append(reports, report)
 	}
@@ -52,22 +45,17 @@ func (p storedDefinitionProvider) ReportExportControl(ctx context.Context, repor
 	}
 	reportKey, objectKey = strings.TrimSpace(reportKey), strings.TrimSpace(objectKey)
 	for _, definition := range snapshot.Definitions {
-		if strings.TrimSpace(definition.ResourceType) != "report_export_control" {
+		if strings.TrimSpace(definition.Report.Key) != reportKey {
 			continue
 		}
-		var control reportmodel.ReportExportControlSchema
-		if err := json.Unmarshal(definition.Payload, &control); err != nil {
-			return reportmodel.ReportExportControlSchema{}, false, fmt.Errorf("decode Report export control %q: %w", definition.Key, err)
-		}
-		if strings.TrimSpace(control.Key) == "" || strings.TrimSpace(control.Key) != strings.TrimSpace(definition.Key) {
-			return reportmodel.ReportExportControlSchema{}, false, fmt.Errorf("Report export control %q has inconsistent payload identity", definition.Key)
-		}
-		if strings.TrimSpace(control.ReportKey) != reportKey {
-			continue
-		}
-		for _, source := range control.SourceObjects {
-			if strings.TrimSpace(source) == objectKey {
-				return control, true, nil
+		for _, control := range definition.ExportControls {
+			if strings.TrimSpace(control.ReportKey) != reportKey {
+				continue
+			}
+			for _, source := range control.SourceObjects {
+				if strings.TrimSpace(source) == objectKey {
+					return control, true, nil
+				}
 			}
 		}
 	}

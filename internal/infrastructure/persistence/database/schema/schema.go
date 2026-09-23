@@ -9,17 +9,6 @@ import (
 	"github.com/domainry/domainry-report-sdk/modulehost"
 )
 
-var definitionTables = []string{
-	"_report_definitions",
-	"_report_operation_state_examples",
-	"_report_sensitive_field_policies",
-	"_report_export_controls",
-}
-
-func DefinitionTables() []string {
-	return append([]string(nil), definitionTables...)
-}
-
 func Statements(driver, schema string) ([]string, error) {
 	parsed, err := ormdialect.Parse(driver)
 	if err != nil {
@@ -30,14 +19,7 @@ func Statements(driver, schema string) ([]string, error) {
 		return nil, err
 	}
 	renderer := dialect.WithSchema(schema)
-	statements := make([]string, 0, len(definitionTables)+1)
-	for _, table := range definitionTables {
-		statement, _, err := definitionTable(renderer, table).Build()
-		if err != nil {
-			return nil, fmt.Errorf("build Report definition table %s: %w", table, err)
-		}
-		statements = append(statements, statement)
-	}
+	statements := make([]string, 0, 1)
 	snapshot, _, err := reportSnapshotTable(renderer).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build Report snapshot table: %w", err)
@@ -74,17 +56,6 @@ func reportSnapshotLatestIndex(driver ormdialect.Name, renderer modulehost.Diale
 	}, nil
 }
 
-func definitionTable(renderer modulehost.Dialect, name string) *ormschema.TableBuilder {
-	return ormschema.NewTable(renderer, name).IfNotExists().Columns(
-		required("id", ormschema.TextKey(255)), required("resource_key", ormschema.TextKey(255)),
-		required("object_key", ormschema.TextKey(255)), required("name", ormschema.Text()),
-		required("payload_json", ormschema.LongText()), required("schema_version", ormschema.TextKey(255)),
-		required("schema_hash", ormschema.TextKey(255)), required("source_kind", ormschema.TextKey(255)),
-		required("source_id", ormschema.TextKey(255)), optional("disabled_at", ormschema.TextKey(255)),
-		required("created_at", ormschema.TextKey(255)), required("updated_at", ormschema.TextKey(255)),
-	).PrimaryKey("id").Unique("resource_key")
-}
-
 func reportSnapshotTable(renderer modulehost.Dialect) *ormschema.TableBuilder {
 	return ormschema.NewTable(renderer, "_report_snapshots").IfNotExists().Columns(
 		required("id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)),
@@ -101,7 +72,4 @@ func reportSnapshotTable(renderer modulehost.Dialect) *ormschema.TableBuilder {
 
 func required(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition {
 	return ormschema.Column(name, kind).NotNull()
-}
-func optional(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition {
-	return ormschema.Column(name, kind)
 }

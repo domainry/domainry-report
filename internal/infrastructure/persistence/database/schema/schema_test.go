@@ -5,23 +5,26 @@ import (
 	"testing"
 )
 
-func TestReportOwnsAllDefinitionAndSnapshotTablesAcrossDialects(t *testing.T) {
+func TestReportOwnsOnlySnapshotTableAcrossDialects(t *testing.T) {
 	for _, driver := range []string{"sqlite", "postgres", "mysql"} {
 		statements, err := Statements(driver, "report_scope")
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantStatements := 6
+		wantStatements := 2
 		if driver == "mysql" {
-			wantStatements = 9
+			wantStatements = 5
 		}
 		if len(statements) != wantStatements {
 			t.Fatalf("driver=%s statements=%#v", driver, statements)
 		}
 		joined := strings.Join(statements, "\n")
-		for _, table := range append(append([]string{}, definitionTables...), "_report_snapshots") {
-			if !strings.Contains(joined, table) {
-				t.Fatalf("driver=%s missing table %s", driver, table)
+		if !strings.Contains(joined, "_report_snapshots") {
+			t.Fatalf("driver=%s missing Report snapshot table", driver)
+		}
+		for _, retired := range []string{"_report_definitions", "_report_operation_state_examples", "_report_sensitive_field_policies", "_report_export_controls"} {
+			if strings.Contains(joined, retired) {
+				t.Fatalf("driver=%s still creates retired definition table %s", driver, retired)
 			}
 		}
 		if driver == "mysql" && (!strings.Contains(joined, "information_schema.statistics") || !strings.Contains(joined, "PREPARE domainry_report_index_stmt")) {

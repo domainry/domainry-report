@@ -16,6 +16,7 @@ import (
 	"time"
 
 	identitysdk "github.com/domainry/domainry-identity-sdk"
+	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	notificationmodel "github.com/domainry/domainry-notification-sdk/contract"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormmigration "github.com/domainry/domainry-orm/migration"
@@ -37,6 +38,7 @@ type integrationHost struct {
 	dialect             modulehost.Dialect
 	registrar           *integrationMigrationRegistrar
 	snapshots           reportpersistence.SnapshotRepository
+	definitions         *integrationDefinitionStore
 	failNextExport      atomic.Bool
 	objectSQLExecutions atomic.Int64
 }
@@ -52,7 +54,8 @@ func (h *integrationHost) Dialect() modulehost.Dialect { return h.dialect }
 func (h *integrationHost) Migrations() modulehost.MigrationRegistrar {
 	return h.registrar
 }
-func (h *integrationHost) ReportSubjects() modulehost.SubjectResolver { return h }
+func (h *integrationHost) DefinitionStore() metadatasdk.DefinitionStore { return h.definitions }
+func (h *integrationHost) ReportSubjects() modulehost.SubjectResolver   { return h }
 func (h *integrationHost) ReportObjectSQL() modulehost.ObjectSQLExecutor {
 	return h
 }
@@ -75,6 +78,80 @@ func (*integrationHost) ReportClock() func() time.Time {
 type integrationMigrationCall struct {
 	owner      string
 	migrations []modulehost.SchemaMigration
+}
+
+type integrationDefinitionStore struct {
+	mu     sync.RWMutex
+	values []metadatasdk.Definition
+}
+
+func (s *integrationDefinitionStore) List(_ context.Context, query metadatasdk.DefinitionQuery) ([]metadatasdk.Definition, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	values := []metadatasdk.Definition{}
+	for _, value := range s.values {
+		if query.Owner != "" && value.Owner != query.Owner {
+			continue
+		}
+		if query.ResourceType != "" && value.ResourceType != query.ResourceType {
+			continue
+		}
+		if query.SourceID != "" && value.SourceID != query.SourceID {
+			continue
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func (s *integrationDefinitionStore) Get(_ context.Context, owner, resourceType, key string) (metadatasdk.Definition, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, value := range s.values {
+		if value.Owner == owner && value.ResourceType == resourceType && value.ResourceKey == key && value.Status == "active" {
+			return value, true, nil
+		}
+	}
+	return metadatasdk.Definition{}, false, nil
+}
+
+func (s *integrationDefinitionStore) Snapshot(ctx context.Context, query metadatasdk.DefinitionQuery) (metadatasdk.DefinitionSnapshot, error) {
+	values, err := s.List(ctx, query)
+	return metadatasdk.DefinitionSnapshot{Definitions: values}, err
+}
+
+func (s *integrationDefinitionStore) ReplaceSourceSnapshot(_ context.Context, snapshot metadatasdk.ProjectionSnapshot) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	retained := make([]metadatasdk.Definition, 0, len(s.values)+len(snapshot.Definitions))
+	for _, value := range s.values {
+		if value.Owner != snapshot.Owner || value.SourceKind != snapshot.SourceKind || value.SourceID != snapshot.SourceID {
+			retained = append(retained, value)
+		}
+	}
+	for _, value := range snapshot.Definitions {
+		hash := sha256.Sum256(value.Payload)
+		value.Owner = snapshot.Owner
+		value.SchemaVersion = snapshot.SchemaVersion
+		value.SchemaHash = hex.EncodeToString(hash[:])
+		value.SourceKind = snapshot.SourceKind
+		value.SourceID = snapshot.SourceID
+		value.Status = "active"
+		value.CurrentVersionID = "definition-version:" + value.SchemaHash[:32]
+		retained = append(retained, value)
+	}
+	s.values = retained
+	return nil
+}
+
+func (*integrationDefinitionStore) Publish(context.Context, metadatasdk.DefinitionPublishCommand) (metadatasdk.DefinitionPublishResult, error) {
+	return metadatasdk.DefinitionPublishResult{}, fmt.Errorf("integration Definition publication is not configured")
+}
+func (*integrationDefinitionStore) Disable(context.Context, metadatasdk.DefinitionDisableCommand) error {
+	return fmt.Errorf("integration Definition disable is not configured")
+}
+func (*integrationDefinitionStore) GetVersion(context.Context, metadatasdk.DefinitionVersionQuery) (metadatasdk.DefinitionVersion, bool, error) {
+	return metadatasdk.DefinitionVersion{}, false, nil
 }
 
 // integrationMigrationRegistrar models the host-owned, owner-qualified
@@ -511,7 +588,7 @@ func newIntegrationHost(t *testing.T) *integrationHost {
 			t.Fatal(err)
 		}
 	}
-	host := &integrationHost{db: database, dialect: renderer}
+	host := &integrationHost{db: database, dialect: renderer, definitions: &integrationDefinitionStore{}}
 	host.registrar = &integrationMigrationRegistrar{db: database, dialect: renderer}
 	for _, sale := range []struct{ workspaceID, id, region, status, amount string }{
 		{"workspace-a", "a-1", "north", "paid", "0.10"},
@@ -582,21 +659,11 @@ func integrationDefinitions(t *testing.T) reportpersistence.DefinitionSnapshot {
 	control := reportmodel.ReportExportControlSchema{
 		Key: "sales-summary-export", ReportKey: summary.Key, SourceObjects: []string{"sale"}, MaxRows: 1000,
 	}
-	definitions := []reportpersistence.Definition{
-		integrationDefinition(t, "report", summary.Key, "", summary.Name, summary),
-		integrationDefinition(t, "report", objectSQL.Key, "", objectSQL.Name, objectSQL),
-		integrationDefinition(t, "report_export_control", control.Key, "sale", "Sales summary export", control),
+	definitions := []reportmodel.ReportDefinitionSchema{
+		{Report: summary, ExportControls: []reportmodel.ReportExportControlSchema{control}},
+		{Report: objectSQL},
 	}
 	return reportpersistence.DefinitionSnapshot{SchemaVersion: "integration-v1", SourceKind: "integration", SourceID: "module-test", Definitions: definitions}
-}
-
-func integrationDefinition(t *testing.T, resourceType, key, objectKey, name string, value any) reportpersistence.Definition {
-	t.Helper()
-	payload, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return reportpersistence.Definition{ResourceType: resourceType, Key: key, ObjectKey: objectKey, Name: name, Payload: payload}
 }
 
 func integrationAuthority(token string) reportmodel.ReportAuthority {
@@ -682,7 +749,7 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 
 	t.Run("definition transaction rolls back atomically", func(t *testing.T) {
 		invalid := integrationDefinitions(t)
-		invalid.Definitions = append(invalid.Definitions, reportpersistence.Definition{ResourceType: "not_owned", Key: "invalid", Payload: json.RawMessage(`{}`)})
+		invalid.Definitions = append(invalid.Definitions, reportmodel.ReportDefinitionSchema{})
 		if err := binding.Definitions().SyncDefinitions(t.Context(), invalid); err == nil {
 			t.Fatal("invalid definition synchronization succeeded")
 		}
@@ -690,8 +757,8 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(stored.Definitions) != 3 {
-			t.Fatalf("active definitions=%d want=3 after rollback", len(stored.Definitions))
+		if len(stored.Definitions) != 2 {
+			t.Fatalf("active definitions=%d want=2 after rollback", len(stored.Definitions))
 		}
 	})
 
