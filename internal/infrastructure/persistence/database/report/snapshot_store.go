@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/domainry/domainry-orm/query"
 	"github.com/domainry/domainry-report-sdk/modulehost"
@@ -29,6 +30,14 @@ func (s *ReportSnapshotStore) Claim(ctx context.Context, request reportpersisten
 	if err := reportSnapshotRequestValid(request); err != nil {
 		return reportpersistence.SnapshotClaim{}, err
 	}
+	startedAt, err := reportTimestampMillis(request.StartedAt)
+	if err != nil {
+		return reportpersistence.SnapshotClaim{}, err
+	}
+	leaseExpiresAt, err := reportTimestampMillis(request.LeaseExpiresAt)
+	if err != nil {
+		return reportpersistence.SnapshotClaim{}, err
+	}
 	if current, ok, err := s.reportSnapshotByIdempotency(ctx, request); err != nil {
 		return reportpersistence.SnapshotClaim{}, err
 	} else if ok {
@@ -38,8 +47,8 @@ func (s *ReportSnapshotStore) Claim(ctx context.Context, request reportpersisten
 		if current.Status == "refreshing" && current.LeaseExpiresAt > request.StartedAt {
 			return reportSnapshotClaim(current, reportpersistence.SnapshotClaimRunning), nil
 		}
-		claimable := query.Or(query.Equal("status", "failed"), query.And(query.Equal("status", "refreshing"), query.LessThanOrEqual("lease_expires_at", request.StartedAt)))
-		queryValue, args, buildErr := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Set("status", "refreshing").Set("started_at", request.StartedAt).Set("error_code", "").Set("lease_owner", request.LeaseOwner).Set("lease_expires_at", request.LeaseExpiresAt).SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).Where(query.And(query.Equal("id", current.ID), claimable)).Build()
+		claimable := query.Or(query.Equal("status", "failed"), query.And(query.Equal("status", "refreshing"), query.LessThanOrEqual("lease_expires_at", startedAt)))
+		queryValue, args, buildErr := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Set("status", "refreshing").Set("started_at", startedAt).Set("error_code", "").Set("lease_owner", request.LeaseOwner).Set("lease_expires_at", leaseExpiresAt).SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).Where(query.And(query.Equal("id", current.ID), claimable)).Build()
 		if buildErr != nil {
 			return reportpersistence.SnapshotClaim{}, buildErr
 		}
@@ -70,11 +79,11 @@ func (s *ReportSnapshotStore) Claim(ctx context.Context, request reportpersisten
 		return reportSnapshotInactiveClaim(claimed), nil
 	}
 	id := reportSnapshotID(request)
-	queryValue, args, buildErr := query.NewWorkspaceInsertBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Columns("id", "report_key", "access_scope_hash", "idempotency_key", "status", "summary_json", "watermark", "source_versions_json", "row_count", "source_row_count", "started_at", "refreshed_at", "error_code", "lease_owner", "lease_expires_at", "fencing_token").Values(id, request.ReportKey, request.AccessScopeHash, request.IdempotencyKey, "refreshing", "{}", "", "{}", 0, 0, request.StartedAt, "", "", request.LeaseOwner, request.LeaseExpiresAt, 1).Build()
+	queryValue, args, buildErr := query.NewWorkspaceInsertBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Columns("id", "report_key", "access_scope_hash", "idempotency_key", "status", "summary_json", "watermark", "source_versions_json", "row_count", "source_row_count", "started_at", "refreshed_at", "error_code", "lease_owner", "lease_expires_at", "fencing_token").Values(id, request.ReportKey, request.AccessScopeHash, request.IdempotencyKey, "refreshing", "{}", "", "{}", 0, 0, startedAt, nil, "", request.LeaseOwner, leaseExpiresAt, 1).Build()
 	if buildErr != nil {
 		return reportpersistence.SnapshotClaim{}, buildErr
 	}
-	_, err := s.host.DatabaseFor(ctx).ExecContext(ctx, queryValue, args...)
+	_, err = s.host.DatabaseFor(ctx).ExecContext(ctx, queryValue, args...)
 	if err != nil {
 		if current, ok, readErr := s.reportSnapshotByIdempotency(ctx, request); readErr == nil && ok {
 			return reportSnapshotInactiveClaim(current), nil
@@ -113,7 +122,11 @@ func (s *ReportSnapshotStore) Complete(ctx context.Context, request reportpersis
 	}
 	versionsJSON, _ := json.Marshal(request.Snapshot.SourceVersions)
 	builder := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.Snapshot.WorkspaceID)
-	queryValue, args, buildErr := builder.Set("status", "succeeded").Set("summary_json", string(summaryJSON)).Set("watermark", request.Snapshot.Watermark).Set("source_versions_json", string(versionsJSON)).Set("row_count", counts.RowCount).Set("source_row_count", counts.SourceRowCount).Set("refreshed_at", request.Snapshot.RefreshedAt).Set("error_code", "").Set("lease_owner", "").Set("lease_expires_at", "").Where(reportSnapshotFencePredicate(request.Snapshot.ID, request.ExpectedStatus, request.LeaseOwner, request.FencingToken)).Build()
+	refreshedAt, err := reportTimestampMillis(request.Snapshot.RefreshedAt)
+	if err != nil {
+		return err
+	}
+	queryValue, args, buildErr := builder.Set("status", "succeeded").Set("summary_json", string(summaryJSON)).Set("watermark", request.Snapshot.Watermark).Set("source_versions_json", string(versionsJSON)).Set("row_count", counts.RowCount).Set("source_row_count", counts.SourceRowCount).Set("refreshed_at", refreshedAt).Set("error_code", "").Set("lease_owner", "").Set("lease_expires_at", nil).Where(reportSnapshotFencePredicate(request.Snapshot.ID, request.ExpectedStatus, request.LeaseOwner, request.FencingToken)).Build()
 	if buildErr != nil {
 		return buildErr
 	}
@@ -128,7 +141,7 @@ func (s *ReportSnapshotStore) Fail(ctx context.Context, request reportpersistenc
 	if strings.TrimSpace(request.WorkspaceID) == "" {
 		return fmt.Errorf("report snapshot workspace is required")
 	}
-	queryValue, args, buildErr := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Set("status", "failed").Set("error_code", request.ErrorCode).Set("lease_owner", "").Set("lease_expires_at", "").Where(reportSnapshotFencePredicate(request.ID, request.ExpectedStatus, request.LeaseOwner, request.FencingToken)).Build()
+	queryValue, args, buildErr := query.NewWorkspaceUpdateBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Set("status", "failed").Set("error_code", request.ErrorCode).Set("lease_owner", "").Set("lease_expires_at", nil).Where(reportSnapshotFencePredicate(request.ID, request.ExpectedStatus, request.LeaseOwner, request.FencingToken)).Build()
 	if buildErr != nil {
 		return buildErr
 	}
@@ -166,12 +179,21 @@ func reportSnapshotStoreColumns() []string {
 func reportSnapshotScan(row *sql.Row) (reportpersistence.Snapshot, bool, error) {
 	var snapshot reportpersistence.Snapshot
 	var summaryJSON, versionsJSON string
-	err := row.Scan(&snapshot.ID, &snapshot.WorkspaceID, &snapshot.ReportKey, &snapshot.AccessScopeHash, &snapshot.IdempotencyKey, &snapshot.Status, &summaryJSON, &snapshot.Watermark, &versionsJSON, &snapshot.StartedAt, &snapshot.RefreshedAt, &snapshot.ErrorCode, &snapshot.LeaseOwner, &snapshot.LeaseExpiresAt, &snapshot.FencingToken)
+	var startedAt int64
+	var refreshedAt, leaseExpiresAt sql.NullInt64
+	err := row.Scan(&snapshot.ID, &snapshot.WorkspaceID, &snapshot.ReportKey, &snapshot.AccessScopeHash, &snapshot.IdempotencyKey, &snapshot.Status, &summaryJSON, &snapshot.Watermark, &versionsJSON, &startedAt, &refreshedAt, &snapshot.ErrorCode, &snapshot.LeaseOwner, &leaseExpiresAt, &snapshot.FencingToken)
 	if err == sql.ErrNoRows {
 		return reportpersistence.Snapshot{}, false, nil
 	}
 	if err != nil {
 		return reportpersistence.Snapshot{}, false, err
+	}
+	snapshot.StartedAt = reportTimestampText(startedAt)
+	if refreshedAt.Valid {
+		snapshot.RefreshedAt = reportTimestampText(refreshedAt.Int64)
+	}
+	if leaseExpiresAt.Valid {
+		snapshot.LeaseExpiresAt = reportTimestampText(leaseExpiresAt.Int64)
 	}
 	snapshot.Summary = json.RawMessage(summaryJSON)
 	if err := json.Unmarshal([]byte(versionsJSON), &snapshot.SourceVersions); err != nil {
@@ -205,4 +227,16 @@ func reportSnapshotRequireAffected(result sql.Result) error {
 		return fmt.Errorf("report snapshot fencing conflict")
 	}
 	return nil
+}
+
+func reportTimestampMillis(value string) (int64, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("invalid UTC timestamp: %w", err)
+	}
+	return parsed.UTC().UnixMilli(), nil
+}
+
+func reportTimestampText(value int64) string {
+	return time.UnixMilli(value).UTC().Format(time.RFC3339Nano)
 }
