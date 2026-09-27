@@ -146,7 +146,7 @@ func (r *integrationMigrationRegistrar) ApplyOwnedMigrations(ctx context.Context
 		}()
 		insertLedger, arguments, err := ormquery.NewInsertBuilder(r.dialect, "_schema_migrations").
 			Columns("path", "version", "name", "kind", "checksum", "dirty", "applied_at").
-			Values(path, fmt.Sprint(migration.Version), migration.Name, "module:"+owner, checksum, true, "").Build()
+			Values(path, fmt.Sprint(migration.Version), migration.Name, "module:"+owner, checksum, true, int64(0)).Build()
 		if err != nil {
 			return err
 		}
@@ -159,7 +159,7 @@ func (r *integrationMigrationRegistrar) ApplyOwnedMigrations(ctx context.Context
 			}
 		}
 		completeLedger, arguments, err := ormquery.NewUpdateBuilder(r.dialect, "_schema_migrations").
-			Set("dirty", false).Set("applied_at", "2026-09-03T12:00:00Z").Where(ormquery.Equal("path", path)).Build()
+			Set("dirty", false).Set("applied_at", time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC).UnixMilli()).Where(ormquery.Equal("path", path)).Build()
 		if err != nil {
 			return err
 		}
@@ -354,11 +354,12 @@ func (h *integrationHost) ReadReportSourceVersion(ctx context.Context, report re
 	defer rows.Close()
 	hash := sha256.New()
 	for rows.Next() {
-		var id, updatedAt string
+		var id string
+		var updatedAt int64
 		if err := rows.Scan(&id, &updatedAt); err != nil {
 			return reportmodel.ReportSnapshotSourceVersion{}, err
 		}
-		_, _ = fmt.Fprintf(hash, "%s\x00%s\x00", id, updatedAt)
+		_, _ = fmt.Fprintf(hash, "%s\x00%d\x00", id, updatedAt)
 	}
 	if err := rows.Err(); err != nil {
 		return reportmodel.ReportSnapshotSourceVersion{}, err
@@ -457,14 +458,15 @@ func (h *integrationHost) PrepareReportExport(ctx context.Context, request repor
 		return reportmodel.ReportExportJob{}, err
 	}
 	digest := sha256.Sum256([]byte(subject.Principal.WorkspaceID + "\x00" + request.IdempotencyKey))
-	now := h.ReportClock()().Format(time.RFC3339Nano)
+	clockNow := h.ReportClock()()
+	now := clockNow.Format(time.RFC3339Nano)
 	job := reportmodel.ReportExportJob{
 		ID: "job_" + hex.EncodeToString(digest[:12]), AuditID: request.AuditID, ReportKey: request.ReportKey,
 		ObjectKey: request.ObjectKey, Status: "queued", Scope: request.Scope, CreatedAt: now, UpdatedAt: now,
 	}
 	statement, arguments, err := ormquery.NewWorkspaceInsertBuilder(h.dialect, "host_export_jobs", subject.Principal.WorkspaceID).
 		Columns("id", "idempotency_key", "audit_id", "report_key", "object_key", "status", "scope_json", "created_at", "updated_at").
-		Values(job.ID, request.IdempotencyKey, request.AuditID, request.ReportKey, request.ObjectKey, job.Status, string(scopeJSON), now, now).Build()
+		Values(job.ID, request.IdempotencyKey, request.AuditID, request.ReportKey, request.ObjectKey, job.Status, string(scopeJSON), clockNow.UnixMilli(), clockNow.UnixMilli()).Build()
 	if err != nil {
 		return reportmodel.ReportExportJob{}, err
 	}
@@ -489,7 +491,8 @@ func (h *integrationHost) exportJobByIdempotency(ctx context.Context, executor m
 	}
 	var job reportmodel.ReportExportJob
 	var scopeJSON string
-	err = executor.QueryRowContext(ctx, statement, arguments...).Scan(&job.ID, &job.AuditID, &job.ReportKey, &job.ObjectKey, &job.Status, &scopeJSON, &job.CreatedAt, &job.UpdatedAt)
+	var createdAt, updatedAt int64
+	err = executor.QueryRowContext(ctx, statement, arguments...).Scan(&job.ID, &job.AuditID, &job.ReportKey, &job.ObjectKey, &job.Status, &scopeJSON, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return reportmodel.ReportExportJob{}, false, nil
 	}
@@ -499,6 +502,8 @@ func (h *integrationHost) exportJobByIdempotency(ctx context.Context, executor m
 	if err := json.Unmarshal([]byte(scopeJSON), &job.Scope); err != nil {
 		return reportmodel.ReportExportJob{}, false, err
 	}
+	job.CreatedAt = time.UnixMilli(createdAt).UTC().Format(time.RFC3339Nano)
+	job.UpdatedAt = time.UnixMilli(updatedAt).UTC().Format(time.RFC3339Nano)
 	return job, true, nil
 }
 
@@ -538,7 +543,7 @@ func newIntegrationHost(t *testing.T) *integrationHost {
 	} {
 		statement, arguments, err := ormquery.NewWorkspaceInsertBuilder(renderer, "host_sales", sale.workspaceID).
 			Columns("id", "region", "status", "amount", "updated_at").
-			Values(sale.id, sale.region, sale.status, sale.amount, "2026-09-03T10:00:00Z").Build()
+			Values(sale.id, sale.region, sale.status, sale.amount, time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC).UnixMilli()).Build()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -556,16 +561,16 @@ func integrationHostTables(renderer modulehost.Dialect) []*ormschema.TableBuilde
 	return []*ormschema.TableBuilder{
 		ormschema.NewTable(renderer, "_schema_migrations").IfNotExists().Columns(
 			required("path", ormschema.TextKey(255)), required("version", ormschema.TextKey(32)), required("name", ormschema.TextKey(191)),
-			required("kind", ormschema.TextKey(64)), required("checksum", ormschema.TextKey(64)), required("dirty", ormschema.Boolean()), required("applied_at", ormschema.TextKey(64)),
+			required("kind", ormschema.TextKey(64)), required("checksum", ormschema.TextKey(64)), required("dirty", ormschema.Boolean()), required("applied_at", ormschema.BigInt()),
 		).PrimaryKey("path"),
 		ormschema.NewTable(renderer, "host_sales").IfNotExists().Columns(
 			required("workspace_id", ormschema.TextKey(191)), required("id", ormschema.TextKey(191)), required("region", ormschema.TextKey(64)),
-			required("status", ormschema.TextKey(64)), required("amount", ormschema.Decimal(19, 2)), required("updated_at", ormschema.TextKey(64)),
+			required("status", ormschema.TextKey(64)), required("amount", ormschema.Decimal(19, 2)), required("updated_at", ormschema.BigInt()),
 		).PrimaryKey("id").Unique("workspace_id", "id"),
 		ormschema.NewTable(renderer, "host_export_jobs").IfNotExists().Columns(
 			required("workspace_id", ormschema.TextKey(191)), required("id", ormschema.TextKey(191)), required("idempotency_key", ormschema.TextKey(191)),
 			required("audit_id", ormschema.TextKey(191)), required("report_key", ormschema.TextKey(191)), required("object_key", ormschema.TextKey(191)),
-			required("status", ormschema.TextKey(32)), required("scope_json", ormschema.LongText()), required("created_at", ormschema.TextKey(64)), required("updated_at", ormschema.TextKey(64)),
+			required("status", ormschema.TextKey(32)), required("scope_json", ormschema.LongText()), required("created_at", ormschema.BigInt()), required("updated_at", ormschema.BigInt()),
 		).PrimaryKey("id").Unique("workspace_id", "idempotency_key"),
 		ormschema.NewTable(renderer, "host_notifications").IfNotExists().Columns(
 			required("workspace_id", ormschema.TextKey(191)), required("id", ormschema.TextKey(255)), required("event_type", ormschema.TextKey(191)), required("subject_id", ormschema.TextKey(191)),
