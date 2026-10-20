@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/domainry/domainry-foundation/modulehttp"
+	"github.com/domainry/domainry-foundation/telemetry"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
@@ -285,6 +286,7 @@ func writeReportError(w http.ResponseWriter, err error) {
 	if len(params) != 0 {
 		payload["params"] = params
 	}
+	telemetry.RecordHTTPStatusError(w, status, code)
 	writeReportJSON(w, status, payload)
 }
 
