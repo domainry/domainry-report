@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/httpresponse"
 	"github.com/domainry/domainry-foundation/modulehttp"
-	"github.com/domainry/domainry-foundation/telemetry"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
@@ -262,9 +262,7 @@ func decodeReportJSON(w http.ResponseWriter, r *http.Request, target any) error 
 }
 
 func writeReportJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	httpresponse.WriteJSON(w, status, payload)
 }
 
 func writeReportError(w http.ResponseWriter, err error) {
@@ -279,15 +277,7 @@ func writeReportError(w http.ResponseWriter, err error) {
 		}
 		message, params = stable.Message, stable.Params
 	}
-	payload := map[string]any{"code": code}
-	if strings.TrimSpace(message) != "" {
-		payload["message"] = message
-	}
-	if len(params) != 0 {
-		payload["params"] = params
-	}
-	telemetry.RecordHTTPStatusError(w, status, code, err)
-	writeReportJSON(w, status, payload)
+	httpresponse.WriteError(w, nil, httpresponse.Failure{Status: status, Code: code, Message: message, Params: params, Cause: err})
 }
 
 var _ modulehttp.Adapter = (*reportHTTPAdapter)(nil)
