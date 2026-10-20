@@ -286,7 +286,7 @@ func writeReportError(w http.ResponseWriter, err error) {
 	if len(params) != 0 {
 		payload["params"] = params
 	}
-	telemetry.RecordHTTPStatusError(w, status, code)
+	telemetry.RecordHTTPStatusError(w, status, code, err)
 	writeReportJSON(w, status, payload)
 }
 
