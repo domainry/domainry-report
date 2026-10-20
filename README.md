@@ -14,7 +14,7 @@ orchestration/persistence.
 - `internal/assembly/module`: embedded-module composition
 - `internal/infrastructure/persistence/database`: Report stores, migrations, and schema DDL
 - `module`: thin public embedded-module facade
-- `contract`, `query`: compatibility facades used by current Runtime releases
+- public Report contracts and ObjectSQL helpers live only in `domainry-report-sdk`
 
 Report is embedded through `domainry-report-sdk/modulehost.ApplicationHost`.
 The host owns database/transaction selection, dialect, migration locking,
@@ -64,5 +64,5 @@ those are explicit blockers for claiming embedded/Remote parity.
 Governed export clients should use Report's typed SDK request contracts and the
 published browser client selected by the product. Operation prerequisites and
 required headers are owned by the same Action/route definitions mounted by Runtime. Go verification
-clients can call `contract.ApplyExportPrepareHeaders` to set the stable
+clients can call `report-sdk/contract.ApplyExportPrepareHeaders` to set the stable
 idempotency key, auditable reason, and exact confirmation value together.

@@ -10,6 +10,36 @@ import (
 	"testing"
 )
 
+func TestRepositoryAndAssemblyExposeOnlyCanonicalEntrypoints(t *testing.T) {
+	root := filepath.Clean(filepath.Join("..", ".."))
+	rootEntries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootAllowed := map[string]bool{"docs": true, "internal": true, "module": true}
+	for _, entry := range rootEntries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		if !rootAllowed[entry.Name()] {
+			t.Errorf("unreviewed Report root directory %q", entry.Name())
+		}
+	}
+	assemblyEntries, err := os.ReadDir(filepath.Join(root, "internal", "assembly"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assemblyAllowed := map[string]bool{"module": true, "saas": true}
+	for _, entry := range assemblyEntries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		if !entry.IsDir() || !assemblyAllowed[entry.Name()] {
+			t.Errorf("internal/assembly contains non-deployment entry %q", entry.Name())
+		}
+	}
+}
+
 func TestReportApplicationConsumesOnlyOwnerDomainAndPublicHostContracts(t *testing.T) {
 	root := filepath.Join("..", "application")
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {

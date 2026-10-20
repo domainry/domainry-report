@@ -14,8 +14,13 @@ import (
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
-	reportcontract "github.com/domainry/domainry-report/contract"
 )
+
+func applyExportPrepareHeaders(header http.Header, idempotencyKey, reason string) {
+	header.Set("Idempotency-Key", idempotencyKey)
+	header.Set("X-Operation-Reason", reason)
+	header.Set("X-Operation-Confirmation", "confirmed")
+}
 
 type reportHTTPQueries struct {
 	objectSQLRequest reportmodel.ReportObjectSQLRequest
@@ -153,9 +158,7 @@ func TestReportHTTPAdapterRejectsTrailingJSONAndForwardsCallerProof(t *testing.T
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/report/sales/exports/order/prepare", strings.NewReader(`{"audit_id":"audit-1","retry_of_job_id":"failed-job-1","scope":{"purpose":"test","freshness":{"mode":"realtime"}}}`))
-	if err := reportcontract.ApplyExportPrepareHeaders(request.Header, "export:orders:request-1", "approved test export"); err != nil {
-		t.Fatal(err)
-	}
+	applyExportPrepareHeaders(request.Header, "export:orders:request-1", "approved test export")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted || response.Header().Get("Location") != "/data-exchange/jobs/job-1?provider=reports&operation=export" {
@@ -170,9 +173,7 @@ func TestReportHTTPAdapterRejectsTrailingJSONAndForwardsCallerProof(t *testing.T
 		Content: io.NopCloser(strings.NewReader("id,name\n1,one\n")),
 	}
 	request = httptest.NewRequest(http.MethodPost, "/report/sales/exports/order/prepare", strings.NewReader(`{"audit_id":"audit-2","scope":{"purpose":"test","freshness":{"mode":"realtime"}}}`))
-	if err := reportcontract.ApplyExportPrepareHeaders(request.Header, "export:orders:request-2", "approved bounded export"); err != nil {
-		t.Fatal(err)
-	}
+	applyExportPrepareHeaders(request.Header, "export:orders:request-2", "approved bounded export")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Body.String() != "id,name\n1,one\n" || response.Header().Get("X-Report-Export-Job-ID") != "job-1" || response.Header().Get("Content-Disposition") != `attachment; filename=sales.csv` {
