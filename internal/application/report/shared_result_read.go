@@ -15,7 +15,7 @@ import (
 
 func sameSharedWorkspace(producer, reader model.ReportSubject) error {
 	if producer.Principal.WorkspaceID != reader.Principal.WorkspaceID {
-		return reportError(403, "backend.permission.denied", nil)
+		return reportError(reportErrorForbidden, "backend.permission.denied", nil)
 	}
 	return nil
 }
@@ -26,7 +26,7 @@ func (s *QueryService) sharedResultScope(ctx context.Context, definition model.R
 	}
 	owner, ok := s.objectSQL.(modulehost.SharedResultScopeAuthorizer)
 	if !ok {
-		return reportError(503, "backend.report.shared_read_scope_unavailable", nil)
+		return reportError(reportErrorUnavailable, "backend.report.shared_read_scope_unavailable", nil)
 	}
 	if err := owner.AuthorizeSharedReportResultScope(ctx, definition, producer, reader); err != nil {
 		return normalizeHostError(err, "backend.report.shared_read_scope_denied")
@@ -50,10 +50,10 @@ func (s *QueryService) AuthorizeSharedQueryResultRead(ctx context.Context, in mo
 		return err
 	}
 	if producer.readScope == "" {
-		return reportError(503, "backend.report.read_scope_unavailable", nil)
+		return reportError(reportErrorUnavailable, "backend.report.read_scope_unavailable", nil)
 	}
 	if !validReadProof(in.Result.Source.ReadProof, s.queryResultReadProof(query, in.Result, producer)) {
-		return reportError(409, "backend.report.result_stale_or_invalid", nil)
+		return reportError(reportErrorConflict, "backend.report.result_stale_or_invalid", nil)
 	}
 	return s.sharedResultScope(ctx, producer.report, producer.subject, reader.subject)
 }
@@ -63,7 +63,7 @@ func (s *QueryService) AuthorizeSharedAnalysisResultRead(ctx context.Context, in
 	defer cancel()
 	raw, err := json.Marshal(in.Result)
 	if err != nil || len(raw) > analysisMaximumResultBytes+256 {
-		return reportError(400, "backend.report.analysis.result_invalid", err)
+		return reportError(reportErrorBadRequest, "backend.report.analysis.result_invalid", err)
 	}
 	reader, readerErr := s.analysisStateForAction(ctx, in.Request, a, sdk.ActionReportResultsRead)
 	if readerErr != nil {
@@ -81,20 +81,20 @@ func (s *QueryService) AuthorizeSharedAnalysisResultRead(ctx context.Context, in
 		return err
 	}
 	if producer.readScope == "" {
-		return reportError(503, "backend.report.read_scope_unavailable", nil)
+		return reportError(reportErrorUnavailable, "backend.report.read_scope_unavailable", nil)
 	}
 	if !validReadProof(in.Result.Source.ReadProof, s.analysisResultReadProof(in.Result, producer)) {
-		return reportError(409, "backend.report.analysis.result_stale_or_invalid", nil)
+		return reportError(reportErrorConflict, "backend.report.analysis.result_stale_or_invalid", nil)
 	}
 	if readerErr != nil {
-		return reportError(403, "backend.permission.denied", nil)
+		return reportError(reportErrorForbidden, "backend.permission.denied", nil)
 	}
 	if err := sameSharedWorkspace(producer.subject, reader.subject); err != nil {
 		return err
 	}
 	if producer.table != nil {
 		if reader.table == nil || *producer.table != *reader.table {
-			return reportError(403, "backend.permission.denied", nil)
+			return reportError(reportErrorForbidden, "backend.permission.denied", nil)
 		}
 		return ctx.Err()
 	}
@@ -110,14 +110,14 @@ func (s *QueryService) AuthorizeSharedCatalogRead(ctx context.Context, in model.
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if s == nil || s.definitions == nil || len(s.cursorKey) == 0 || len(in.Result.Reports) > model.ReportCatalogMaximumSize {
-		return reportError(503, "backend.report.catalog_unavailable", nil)
+		return reportError(reportErrorUnavailable, "backend.report.catalog_unavailable", nil)
 	}
 	reader, err := s.resolveSubject(ctx, a)
 	if err != nil {
 		return err
 	}
 	if !reader.HasPermission(sdk.ActionReportResultsRead) {
-		return reportError(403, "backend.permission.denied", nil)
+		return reportError(reportErrorForbidden, "backend.permission.denied", nil)
 	}
 	producer, err := s.resolveSubject(ctx, origin)
 	if err != nil {
@@ -133,7 +133,7 @@ func (s *QueryService) AuthorizeSharedCatalogRead(ctx context.Context, in model.
 	definitions = append([]model.ReportSchema{}, definitions...)
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Key < definitions[j].Key })
 	if !validReadProof(in.Result.ReadProof, s.catalogReadProof(in.Request, in.Result, definitions, producer)) {
-		return reportError(409, "backend.report.result_stale_or_invalid", nil)
+		return reportError(reportErrorConflict, "backend.report.result_stale_or_invalid", nil)
 	}
 	for _, entry := range in.Result.Reports {
 		subject, definition, err := s.resolve(ctx, entry.Key, a, sdk.ActionReportResultsRead)
@@ -151,7 +151,7 @@ func (s *QueryService) AuthorizeSharedAnalysisCatalogRead(ctx context.Context, i
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if s == nil || len(s.cursorKey) == 0 || len(in.Result.Datasets) > 50 {
-		return reportError(503, "backend.report.analysis.unavailable", nil)
+		return reportError(reportErrorUnavailable, "backend.report.analysis.unavailable", nil)
 	}
 	producer, err := s.resolveSubject(ctx, origin)
 	if err != nil {
@@ -173,7 +173,7 @@ func (s *QueryService) AuthorizeSharedAnalysisCatalogRead(ctx context.Context, i
 		original = filtered
 	}
 	if len(in.Result.Datasets) > 50 || !validReadProof(in.Result.ReadProof, s.analysisCatalogReadProof(in.Request, in.Result, original, producer)) {
-		return reportError(409, "backend.report.analysis.result_stale_or_invalid", nil)
+		return reportError(reportErrorConflict, "backend.report.analysis.result_stale_or_invalid", nil)
 	}
 	reader, current, err := s.analysisDatasetsForAction(ctx, a, sdk.ActionReportResultsRead)
 	if err != nil {
@@ -188,7 +188,7 @@ func (s *QueryService) AuthorizeSharedAnalysisCatalogRead(ctx context.Context, i
 			found = found || canonicalHash(candidate) == canonicalHash(released)
 		}
 		if !found {
-			return reportError(403, "backend.permission.denied", nil)
+			return reportError(reportErrorForbidden, "backend.permission.denied", nil)
 		}
 	}
 	return ctx.Err()

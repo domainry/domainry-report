@@ -24,7 +24,7 @@ func (s *QueryService) resultReadScope(ctx context.Context, report model.ReportS
 	}
 	decoded, err := hex.DecodeString(scope)
 	if err != nil || len(decoded) != sha256.Size {
-		return "", reportError(503, "backend.report.read_scope_unavailable", nil)
+		return "", reportError(reportErrorUnavailable, "backend.report.read_scope_unavailable", nil)
 	}
 	return scope, nil
 }
@@ -48,14 +48,14 @@ func (s *QueryService) AuthorizeQueryResultRead(ctx context.Context, in model.Re
 		return err
 	}
 	if state.readScope == "" {
-		return reportError(503, "backend.report.read_scope_unavailable", nil)
+		return reportError(reportErrorUnavailable, "backend.report.read_scope_unavailable", nil)
 	}
 	query, err := normalizedEvidenceQuery(state.report, in.Query)
 	if err != nil {
 		return err
 	}
 	if !validReadProof(in.Result.Source.ReadProof, s.queryResultReadProof(query, in.Result, state)) {
-		return reportError(409, "backend.report.result_stale_or_invalid", nil)
+		return reportError(reportErrorConflict, "backend.report.result_stale_or_invalid", nil)
 	}
 	return ctx.Err()
 }
@@ -70,17 +70,17 @@ func (s *QueryService) AuthorizeAnalysisResultRead(ctx context.Context, in model
 	defer cancel()
 	raw, err := json.Marshal(in.Result)
 	if err != nil || len(raw) > analysisMaximumResultBytes+256 {
-		return reportError(400, "backend.report.analysis.result_invalid", err)
+		return reportError(reportErrorBadRequest, "backend.report.analysis.result_invalid", err)
 	}
 	state, err := s.analysisStateForAction(ctx, in.Request, a, sdk.ActionReportResultsRead)
 	if err != nil {
 		return err
 	}
 	if state.readScope == "" {
-		return reportError(503, "backend.report.read_scope_unavailable", nil)
+		return reportError(reportErrorUnavailable, "backend.report.read_scope_unavailable", nil)
 	}
 	if !validReadProof(in.Result.Source.ReadProof, s.analysisResultReadProof(in.Result, state)) {
-		return reportError(409, "backend.report.analysis.result_stale_or_invalid", nil)
+		return reportError(reportErrorConflict, "backend.report.analysis.result_stale_or_invalid", nil)
 	}
 	return ctx.Err()
 }

@@ -22,21 +22,21 @@ type catalogCursor struct {
 
 func (s *QueryService) Catalog(ctx context.Context, request reportmodel.ReportCatalogRequest, authority reportmodel.ReportAuthority) (reportmodel.ReportCatalog, error) {
 	if s == nil || s.definitions == nil || len(s.cursorKey) == 0 {
-		return reportmodel.ReportCatalog{}, reportError(500, "backend.report.catalog_unavailable", nil)
+		return reportmodel.ReportCatalog{}, reportError(reportErrorInternal, "backend.report.catalog_unavailable", nil)
 	}
 	subject, err := s.resolveSubject(ctx, authority)
 	if err != nil {
 		return reportmodel.ReportCatalog{}, err
 	}
 	if !subject.HasPermission(reportsdk.ActionReportQueryExecute) {
-		return reportmodel.ReportCatalog{}, reportError(403, "backend.permission.denied", nil)
+		return reportmodel.ReportCatalog{}, reportError(reportErrorForbidden, "backend.permission.denied", nil)
 	}
 	size := request.Page.PageSize
 	if size == 0 {
 		size = reportmodel.ReportCatalogDefaultSize
 	}
 	if size < 1 || size > reportmodel.ReportCatalogMaximumSize {
-		return reportmodel.ReportCatalog{}, reportError(400, "backend.report.page_size_invalid", nil)
+		return reportmodel.ReportCatalog{}, reportError(reportErrorBadRequest, "backend.report.page_size_invalid", nil)
 	}
 	reports, err := s.definitions.ReportDefinitions(ctx)
 	if err != nil {
@@ -52,12 +52,12 @@ func (s *QueryService) Catalog(ctx context.Context, request reportmodel.ReportCa
 	position := 0
 	if request.Page.Cursor != "" {
 		if len(request.Page.Cursor) > 2048 {
-			return reportmodel.ReportCatalog{}, reportError(400, "backend.report.cursor_invalid", nil)
+			return reportmodel.ReportCatalog{}, reportError(reportErrorBadRequest, "backend.report.cursor_invalid", nil)
 		}
 		content, err := base64.RawURLEncoding.DecodeString(request.Page.Cursor)
 		var cursor catalogCursor
 		if err != nil || json.Unmarshal(content, &cursor) != nil || cursor.Fingerprint != fingerprint || cursor.Position < 1 || cursor.Position >= len(reports) || !hmac.Equal([]byte(cursor.Proof), []byte(s.catalogProof(cursor))) {
-			return reportmodel.ReportCatalog{}, reportError(400, "backend.report.cursor_invalid", nil)
+			return reportmodel.ReportCatalog{}, reportError(reportErrorBadRequest, "backend.report.cursor_invalid", nil)
 		}
 		position = cursor.Position
 	}
@@ -80,7 +80,7 @@ func (s *QueryService) Catalog(ctx context.Context, request reportmodel.ReportCa
 		plan, err := s.compileAuthorizedObjectSQL(ctx, reportForDataPermissions(report, reportDataPermissionKeys(report)), resolved)
 		if err != nil {
 			var denied *reportsdk.Error
-			if errors.As(err, &denied) && (denied.StatusCode == 403 || denied.StatusCode == 404) {
+			if errors.As(err, &denied) && (denied.Class == reportsdk.ErrorClassForbidden || denied.Class == reportsdk.ErrorClassNotFound) {
 				continue
 			}
 			return reportmodel.ReportCatalog{}, err
@@ -97,12 +97,12 @@ func (s *QueryService) Catalog(ctx context.Context, request reportmodel.ReportCa
 		parameters := make([]reportmodel.ReportObjectSQLParameter, len(report.ObjectSQLV1.Parameters))
 		content, err := json.Marshal(report.ObjectSQLV1.Parameters)
 		if err != nil {
-			return reportmodel.ReportCatalog{}, reportError(500, "backend.report.definition_invalid", err)
+			return reportmodel.ReportCatalog{}, reportError(reportErrorInternal, "backend.report.definition_invalid", err)
 		}
 		decoder := json.NewDecoder(bytes.NewReader(content))
 		decoder.UseNumber()
 		if err := decoder.Decode(&parameters); err != nil {
-			return reportmodel.ReportCatalog{}, reportError(500, "backend.report.definition_invalid", err)
+			return reportmodel.ReportCatalog{}, reportError(reportErrorInternal, "backend.report.definition_invalid", err)
 		}
 		if parameters == nil {
 			parameters = []reportmodel.ReportObjectSQLParameter{}

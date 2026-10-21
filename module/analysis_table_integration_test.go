@@ -29,11 +29,11 @@ func (s *publicTableSource) ReportAnalysisSources(ctx context.Context, subject m
 }
 func (s *publicTableSource) ReadReportAnalysisTableVersion(ctx context.Context, key string, fields []string, subject model.ReportSubject) (modulehost.AnalysisTableVersion, error) {
 	if s.denied || key != "source_table" || subject.Principal.UserID != "user-a" || subject.Principal.WorkspaceID != "workspace-a" {
-		return modulehost.AnalysisTableVersion{}, &reportsdk.Error{StatusCode: 403, Code: "backend.permission.denied"}
+		return modulehost.AnalysisTableVersion{}, &reportsdk.Error{Class: reportsdk.ErrorClassForbidden, Code: "backend.permission.denied"}
 	}
 	for _, field := range fields {
 		if field != "dept" && field != "amount" {
-			return modulehost.AnalysisTableVersion{}, &reportsdk.Error{StatusCode: 403, Code: "backend.permission.denied"}
+			return modulehost.AnalysisTableVersion{}, &reportsdk.Error{Class: reportsdk.ErrorClassForbidden, Code: "backend.permission.denied"}
 		}
 	}
 	digest := sha256.New()

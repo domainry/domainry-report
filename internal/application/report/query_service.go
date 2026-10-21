@@ -71,7 +71,7 @@ func (s *QueryService) Summary(ctx context.Context, request reportmodel.ReportSu
 	}
 	if mode == "snapshot" {
 		if len(request.Parameters) != 0 {
-			return reportmodel.ReportSummary{}, reportError(400, "backend.report.snapshot_scope_unsupported", nil)
+			return reportmodel.ReportSummary{}, reportError(reportErrorBadRequest, "backend.report.snapshot_scope_unsupported", nil)
 		}
 		summary, err := s.readSnapshot(ctx, report, subject)
 		if err != nil {
@@ -80,7 +80,7 @@ func (s *QueryService) Summary(ctx context.Context, request reportmodel.ReportSu
 		return s.paginateImmutable(summary, request.Page, reportFingerprint(report, map[string]any{"mode": mode}, subject), summary.Snapshot.SnapshotID)
 	}
 	if mode != "realtime" {
-		return reportmodel.ReportSummary{}, reportError(400, "backend.report.execution_mode_invalid", nil)
+		return reportmodel.ReportSummary{}, reportError(reportErrorBadRequest, "backend.report.execution_mode_invalid", nil)
 	}
 	scoped := reportForDataPermissions(report, reportDataPermissionKeys(report))
 	normalized, err := reportobjectsql.NormalizeParameters(report.ObjectSQLV1.Parameters, request.Parameters)
@@ -104,7 +104,7 @@ func (s *QueryService) QueryObjectSQL(ctx context.Context, request reportmodel.R
 		return reportmodel.ReportSummary{}, err
 	}
 	if report.ObjectSQLV1 == nil {
-		return reportmodel.ReportSummary{}, reportError(400, "backend.report.object_sql_not_enabled", nil)
+		return reportmodel.ReportSummary{}, reportError(reportErrorBadRequest, "backend.report.object_sql_not_enabled", nil)
 	}
 	report = reportForDataPermissions(report, reportDataPermissionKeys(report))
 	normalized, err := reportobjectsql.NormalizeParameters(report.ObjectSQLV1.Parameters, request.Parameters)
@@ -124,7 +124,7 @@ func (s *QueryService) QueryObjectSQL(ctx context.Context, request reportmodel.R
 
 func (s *QueryService) resolve(ctx context.Context, reportKey string, authority reportmodel.ReportAuthority, actionKey string) (reportmodel.ReportSubject, reportmodel.ReportSchema, error) {
 	if s == nil || s.subjects == nil || s.definitions == nil {
-		return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(500, "backend.report.execution_unavailable", nil)
+		return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(reportErrorInternal, "backend.report.execution_unavailable", nil)
 	}
 	subject, err := s.resolveSubject(ctx, authority)
 	if err != nil {
@@ -133,7 +133,7 @@ func (s *QueryService) resolve(ctx context.Context, reportKey string, authority 
 	// Empty action is used only to authenticate an original shared-result proof.
 	// Current data and audience checks below still apply; no execution is offered.
 	if actionKey != "" && !subject.HasPermission(strings.TrimSpace(actionKey)) {
-		return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(403, "backend.permission.denied", nil)
+		return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(reportErrorForbidden, "backend.permission.denied", nil)
 	}
 	reports, err := s.definitions.ReportDefinitions(ctx)
 	if err != nil {
@@ -157,7 +157,7 @@ func (s *QueryService) resolve(ctx context.Context, reportKey string, authority 
 		}
 		return resolvedSubject, report, nil
 	}
-	return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(404, "backend.report.not_found", nil)
+	return reportmodel.ReportSubject{}, reportmodel.ReportSchema{}, reportError(reportErrorNotFound, "backend.report.not_found", nil)
 }
 
 // reportDataPermissionKeys resolves the exact Permission set whose data
@@ -227,24 +227,24 @@ func reportVisibleToSubject(report reportmodel.ReportSchema, subject reportmodel
 
 func (s *QueryService) resolveSubject(ctx context.Context, authority reportmodel.ReportAuthority) (reportmodel.ReportSubject, error) {
 	if s == nil || s.subjects == nil {
-		return reportmodel.ReportSubject{}, reportError(500, "backend.report.execution_unavailable", nil)
+		return reportmodel.ReportSubject{}, reportError(reportErrorInternal, "backend.report.execution_unavailable", nil)
 	}
 	if err := authority.Validate(); err != nil {
-		return reportmodel.ReportSubject{}, reportError(401, "auth.token_required", err)
+		return reportmodel.ReportSubject{}, reportError(reportErrorForbidden, "auth.token_required", err)
 	}
 	subject, err := s.subjects.ResolveReportSubject(ctx, authority)
 	if err != nil {
 		return reportmodel.ReportSubject{}, normalizeHostError(err, "backend.report.subject_resolution_failed")
 	}
 	if err := subject.Validate(); err != nil {
-		return reportmodel.ReportSubject{}, reportError(403, "backend.workspace_scope_required", err)
+		return reportmodel.ReportSubject{}, reportError(reportErrorForbidden, "backend.workspace_scope_required", err)
 	}
 	return subject, nil
 }
 
 func (s *QueryService) execute(ctx context.Context, report reportmodel.ReportSchema, parameters map[string]any, subject reportmodel.ReportSubject) (reportmodel.ReportSummary, error) {
 	if report.ObjectSQLV1 == nil {
-		return reportmodel.ReportSummary{}, reportError(400, "backend.report.object_sql_not_enabled", nil)
+		return reportmodel.ReportSummary{}, reportError(reportErrorBadRequest, "backend.report.object_sql_not_enabled", nil)
 	}
 	return s.executeObjectSQL(ctx, report, parameters, subject)
 }
@@ -256,7 +256,7 @@ func (s *QueryService) executeObjectSQL(ctx context.Context, report reportmodel.
 
 func (s *QueryService) executeObjectSQLPage(ctx context.Context, report reportmodel.ReportSchema, parameters map[string]any, subject reportmodel.ReportSubject, pageCursor string, pagePosition, pageSize int) (reportmodel.ReportSummary, reportmodel.ReportObjectSQLExecutionResult, error) {
 	if s.objectSQL == nil || report.ObjectSQLV1 == nil {
-		return reportmodel.ReportSummary{}, reportmodel.ReportObjectSQLExecutionResult{}, reportError(500, "backend.report.object_sql_execution_unavailable", nil)
+		return reportmodel.ReportSummary{}, reportmodel.ReportObjectSQLExecutionResult{}, reportError(reportErrorInternal, "backend.report.object_sql_execution_unavailable", nil)
 	}
 	plan, err := s.compileAuthorizedObjectSQL(ctx, report, subject)
 	if err != nil {
@@ -301,7 +301,7 @@ func (s *QueryService) executeObjectSQLPage(ctx context.Context, report reportmo
 
 func (s *QueryService) compileAuthorizedObjectSQL(ctx context.Context, report reportmodel.ReportSchema, subject reportmodel.ReportSubject) (reportmodel.ReportObjectSQLPlan, error) {
 	if s == nil || s.objectSQL == nil || report.ObjectSQLV1 == nil {
-		return reportmodel.ReportObjectSQLPlan{}, reportError(500, "backend.report.object_sql_execution_unavailable", nil)
+		return reportmodel.ReportObjectSQLPlan{}, reportError(reportErrorInternal, "backend.report.object_sql_execution_unavailable", nil)
 	}
 	sources, err := s.objectSQL.ResolveReportObjectSQLSources(ctx, report, subject)
 	if err != nil {
@@ -316,7 +316,7 @@ func (s *QueryService) compileAuthorizedObjectSQL(ctx context.Context, report re
 		return reportmodel.ReportObjectSQLPlan{}, objectSQLApplicationError(err)
 	}
 	if reportmodel.ReportCrossWorkspaceAggregate(report) && !reportobjectsql.SafeCrossWorkspaceAggregatePlan(plan) {
-		return reportmodel.ReportObjectSQLPlan{}, reportError(403, "backend.report.cross_workspace_raw_projection_forbidden", nil)
+		return reportmodel.ReportObjectSQLPlan{}, reportError(reportErrorForbidden, "backend.report.cross_workspace_raw_projection_forbidden", nil)
 	}
 	if err := s.objectSQL.AuthorizeReportObjectSQLPlan(ctx, report, plan, subject); err != nil {
 		return reportmodel.ReportObjectSQLPlan{}, normalizeHostError(err, "backend.report.object_sql_field_authorization_failed")
@@ -337,25 +337,25 @@ func reportEngineObject(source reportmodel.ReportSourceObject) reportquery.Objec
 
 func (s *QueryService) readSnapshot(ctx context.Context, report reportmodel.ReportSchema, subject reportmodel.ReportSubject) (reportmodel.ReportSummary, error) {
 	if report.Materialization == nil {
-		return reportmodel.ReportSummary{}, reportError(400, "backend.report.materialization_not_enabled", nil)
+		return reportmodel.ReportSummary{}, reportError(reportErrorBadRequest, "backend.report.materialization_not_enabled", nil)
 	}
 	if s.snapshots == nil {
-		return reportmodel.ReportSummary{}, reportError(500, "backend.report.snapshot_unavailable", nil)
+		return reportmodel.ReportSummary{}, reportError(reportErrorInternal, "backend.report.snapshot_unavailable", nil)
 	}
 	snapshot, found, err := s.snapshots.Latest(ctx, subject.Principal.WorkspaceID, report.Key, reportSnapshotAccessScopeHash(subject, reportDataPermissionKeys(report)))
 	if err != nil {
-		return reportmodel.ReportSummary{}, reportError(500, "backend.report.snapshot_read_failed", err)
+		return reportmodel.ReportSummary{}, reportError(reportErrorInternal, "backend.report.snapshot_read_failed", err)
 	}
 	if !found {
-		return reportmodel.ReportSummary{}, reportError(404, "backend.report.snapshot_not_found", nil)
+		return reportmodel.ReportSummary{}, reportError(reportErrorNotFound, "backend.report.snapshot_not_found", nil)
 	}
 	var summary reportmodel.ReportSummary
 	if err := json.Unmarshal(snapshot.Summary, &summary); err != nil {
-		return reportmodel.ReportSummary{}, reportError(500, "backend.report.snapshot_invalid", err)
+		return reportmodel.ReportSummary{}, reportError(reportErrorInternal, "backend.report.snapshot_invalid", err)
 	}
 	refreshedAt, err := time.Parse(time.RFC3339Nano, snapshot.RefreshedAt)
 	if err != nil {
-		return reportmodel.ReportSummary{}, reportError(500, "backend.report.snapshot_invalid", err)
+		return reportmodel.ReportSummary{}, reportError(reportErrorInternal, "backend.report.snapshot_invalid", err)
 	}
 	lag := s.clock().UTC().Sub(refreshedAt)
 	if lag < 0 {
@@ -379,7 +379,7 @@ type stablePageCursor struct {
 
 func (s *QueryService) executeStablePage(ctx context.Context, report reportmodel.ReportSchema, page reportmodel.ReportPageRequest, fingerprint string, subject reportmodel.ReportSubject, execute func() (reportmodel.ReportSummary, error)) (reportmodel.ReportSummary, error) {
 	if s.sourceVersions == nil || len(s.cursorKey) == 0 {
-		return reportmodel.ReportSummary{}, reportError(500, "backend.report.pagination_unavailable", nil)
+		return reportmodel.ReportSummary{}, reportError(reportErrorInternal, "backend.report.pagination_unavailable", nil)
 	}
 	continued := strings.TrimSpace(page.Cursor) != ""
 	var cursor stablePageCursor
@@ -397,7 +397,7 @@ func (s *QueryService) executeStablePage(ctx context.Context, report reportmodel
 		}
 		beforeHash := canonicalHash(before)
 		if continued && cursor.SourceVersionHash != beforeHash {
-			return reportmodel.ReportSummary{}, reportError(409, "backend.report.cursor_stale", nil)
+			return reportmodel.ReportSummary{}, reportError(reportErrorConflict, "backend.report.cursor_stale", nil)
 		}
 		summary, err := execute()
 		if err != nil {
@@ -411,22 +411,22 @@ func (s *QueryService) executeStablePage(ctx context.Context, report reportmodel
 			return s.paginate(summary, page, fingerprint, beforeHash, cursor)
 		}
 		if continued {
-			return reportmodel.ReportSummary{}, reportError(409, "backend.report.cursor_stale", nil)
+			return reportmodel.ReportSummary{}, reportError(reportErrorConflict, "backend.report.cursor_stale", nil)
 		}
 	}
-	return reportmodel.ReportSummary{}, reportError(409, "backend.report.source_changed", nil)
+	return reportmodel.ReportSummary{}, reportError(reportErrorConflict, "backend.report.source_changed", nil)
 }
 
 func (s *QueryService) executeStableObjectSQLPage(ctx context.Context, report reportmodel.ReportSchema, parameters map[string]any, page reportmodel.ReportPageRequest, fingerprint string, subject reportmodel.ReportSubject) (reportmodel.ReportSummary, error) {
 	if s.sourceVersions == nil || len(s.cursorKey) == 0 {
-		return reportmodel.ReportSummary{}, reportError(500, "backend.report.pagination_unavailable", nil)
+		return reportmodel.ReportSummary{}, reportError(reportErrorInternal, "backend.report.pagination_unavailable", nil)
 	}
 	pageSize := page.PageSize
 	if pageSize == 0 {
 		pageSize = reportmodel.ReportPageDefaultSize
 	}
 	if pageSize < 1 || pageSize > reportmodel.ReportPageMaximumSize {
-		return reportmodel.ReportSummary{}, reportError(400, "backend.report.page_size_invalid", nil)
+		return reportmodel.ReportSummary{}, reportError(reportErrorBadRequest, "backend.report.page_size_invalid", nil)
 	}
 	continued := strings.TrimSpace(page.Cursor) != ""
 	cursor := stablePageCursor{}
@@ -444,14 +444,14 @@ func (s *QueryService) executeStableObjectSQLPage(ctx context.Context, report re
 		}
 		beforeHash := canonicalHash(before)
 		if continued && cursor.SourceVersionHash != beforeHash {
-			return reportmodel.ReportSummary{}, reportError(409, "backend.report.cursor_stale", nil)
+			return reportmodel.ReportSummary{}, reportError(reportErrorConflict, "backend.report.cursor_stale", nil)
 		}
 		summary, execution, err := s.executeObjectSQLPage(ctx, report, parameters, subject, cursor.ExecutionCursor, cursor.Position, pageSize)
 		if err != nil {
 			return reportmodel.ReportSummary{}, err
 		}
 		if len(summary.Rows) > pageSize || execution.HasMore && (len(summary.Rows) == 0 || strings.TrimSpace(execution.NextCursor) == "") {
-			return reportmodel.ReportSummary{}, reportError(409, "backend.report.pagination_contract_invalid", nil)
+			return reportmodel.ReportSummary{}, reportError(reportErrorConflict, "backend.report.pagination_contract_invalid", nil)
 		}
 		after, err := s.sourceVersions.ReadReportSourceVersion(ctx, report, subject)
 		if err != nil {
@@ -459,7 +459,7 @@ func (s *QueryService) executeStableObjectSQLPage(ctx context.Context, report re
 		}
 		if canonicalHash(after) != beforeHash {
 			if continued {
-				return reportmodel.ReportSummary{}, reportError(409, "backend.report.cursor_stale", nil)
+				return reportmodel.ReportSummary{}, reportError(reportErrorConflict, "backend.report.cursor_stale", nil)
 			}
 			continue
 		}
@@ -468,7 +468,7 @@ func (s *QueryService) executeStableObjectSQLPage(ctx context.Context, report re
 		summary.Truncated, summary.ExecutionCursor, summary.NextCursor = execution.HasMore, execution.NextCursor, ""
 		if execution.TotalKnown {
 			if execution.Total < position {
-				return reportmodel.ReportSummary{}, reportError(409, "backend.report.pagination_contract_invalid", nil)
+				return reportmodel.ReportSummary{}, reportError(reportErrorConflict, "backend.report.pagination_contract_invalid", nil)
 			}
 			summary.Total, summary.TotalSemantics = execution.Total, reportmodel.ReportTotalExact
 		} else {
@@ -482,7 +482,7 @@ func (s *QueryService) executeStableObjectSQLPage(ctx context.Context, report re
 		}
 		return summary, nil
 	}
-	return reportmodel.ReportSummary{}, reportError(409, "backend.report.source_changed", nil)
+	return reportmodel.ReportSummary{}, reportError(reportErrorConflict, "backend.report.source_changed", nil)
 }
 
 func (s *QueryService) paginateImmutable(summary reportmodel.ReportSummary, page reportmodel.ReportPageRequest, fingerprint, version string) (reportmodel.ReportSummary, error) {
@@ -493,7 +493,7 @@ func (s *QueryService) paginateImmutable(summary reportmodel.ReportSummary, page
 			return reportmodel.ReportSummary{}, err
 		}
 		if decoded.SourceVersionHash != version {
-			return reportmodel.ReportSummary{}, reportError(409, "backend.report.cursor_stale", nil)
+			return reportmodel.ReportSummary{}, reportError(reportErrorConflict, "backend.report.cursor_stale", nil)
 		}
 		cursor = decoded
 	}
@@ -506,14 +506,14 @@ func (s *QueryService) paginate(summary reportmodel.ReportSummary, page reportmo
 		pageSize = reportmodel.ReportPageDefaultSize
 	}
 	if pageSize < 1 || pageSize > reportmodel.ReportPageMaximumSize {
-		return reportmodel.ReportSummary{}, reportError(400, "backend.report.page_size_invalid", nil)
+		return reportmodel.ReportSummary{}, reportError(reportErrorBadRequest, "backend.report.page_size_invalid", nil)
 	}
 	allRows := summary.Rows
 	start := 0
 	if cursor.Version != 0 {
 		start = rowAfterCursor(allRows, cursor)
 		if start < 0 {
-			return reportmodel.ReportSummary{}, reportError(409, "backend.report.cursor_stale", nil)
+			return reportmodel.ReportSummary{}, reportError(reportErrorConflict, "backend.report.cursor_stale", nil)
 		}
 	}
 	total := len(allRows)
@@ -563,11 +563,11 @@ func (s *QueryService) encodePageCursor(cursor stablePageCursor) string {
 func (s *QueryService) decodePageCursor(value, fingerprint string) (stablePageCursor, error) {
 	content, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(value))
 	if err != nil {
-		return stablePageCursor{}, reportError(400, "backend.report.cursor_invalid", err)
+		return stablePageCursor{}, reportError(reportErrorBadRequest, "backend.report.cursor_invalid", err)
 	}
 	var cursor stablePageCursor
 	if err := json.Unmarshal(content, &cursor); err != nil || cursor.Version != 1 || cursor.Fingerprint != fingerprint || cursor.SourceVersionHash == "" || cursor.LastRowKey == "" || cursor.Occurrence < 1 || !hmac.Equal([]byte(cursor.Checksum), []byte(s.pageCursorChecksum(cursor))) {
-		return stablePageCursor{}, reportError(400, "backend.report.cursor_invalid", err)
+		return stablePageCursor{}, reportError(reportErrorBadRequest, "backend.report.cursor_invalid", err)
 	}
 	return cursor, nil
 }
@@ -575,11 +575,11 @@ func (s *QueryService) decodePageCursor(value, fingerprint string) (stablePageCu
 func (s *QueryService) decodeObjectSQLPageCursor(value, fingerprint string) (stablePageCursor, error) {
 	content, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(value))
 	if err != nil {
-		return stablePageCursor{}, reportError(400, "backend.report.cursor_invalid", err)
+		return stablePageCursor{}, reportError(reportErrorBadRequest, "backend.report.cursor_invalid", err)
 	}
 	var cursor stablePageCursor
 	if err := json.Unmarshal(content, &cursor); err != nil || cursor.Version != 2 || cursor.Fingerprint != fingerprint || cursor.SourceVersionHash == "" || strings.TrimSpace(cursor.ExecutionCursor) == "" || cursor.Position < 1 || !hmac.Equal([]byte(cursor.Checksum), []byte(s.pageCursorChecksum(cursor))) {
-		return stablePageCursor{}, reportError(400, "backend.report.cursor_invalid", err)
+		return stablePageCursor{}, reportError(reportErrorBadRequest, "backend.report.cursor_invalid", err)
 	}
 	return cursor, nil
 }
@@ -628,7 +628,7 @@ func (s *QueryService) auditCrossWorkspace(ctx context.Context, report reportmod
 		return nil
 	}
 	if s.audit == nil {
-		return reportError(500, "backend.report.execution_audit_unavailable", nil)
+		return reportError(reportErrorInternal, "backend.report.execution_audit_unavailable", nil)
 	}
 	if err := s.audit.AppendReportExecution(ctx, report, summary, subject); err != nil {
 		return normalizeHostError(err, "backend.report.execution_audit_failed")
@@ -636,8 +636,18 @@ func (s *QueryService) auditCrossWorkspace(ctx context.Context, report reportmod
 	return nil
 }
 
-func reportError(status int, code string, cause error) error {
-	return &reportsdk.Error{StatusCode: status, Code: code, Cause: cause}
+const (
+	reportErrorBadRequest  reportsdk.ErrorClass = reportsdk.ErrorClassBadRequest
+	reportErrorForbidden   reportsdk.ErrorClass = reportsdk.ErrorClassForbidden
+	reportErrorNotFound    reportsdk.ErrorClass = reportsdk.ErrorClassNotFound
+	reportErrorConflict    reportsdk.ErrorClass = reportsdk.ErrorClassConflict
+	reportErrorRateLimited reportsdk.ErrorClass = reportsdk.ErrorClassRateLimited
+	reportErrorUnavailable reportsdk.ErrorClass = reportsdk.ErrorClassUnavailable
+	reportErrorInternal    reportsdk.ErrorClass = reportsdk.ErrorClassInternal
+)
+
+func reportError(class reportsdk.ErrorClass, code string, cause error) error {
+	return &reportsdk.Error{Class: class, Code: code, Cause: cause}
 }
 
 func normalizeHostError(err error, code string) error {
@@ -645,19 +655,19 @@ func normalizeHostError(err error, code string) error {
 	if errors.As(err, &stable) {
 		return err
 	}
-	return reportError(500, code, err)
+	return reportError(reportErrorInternal, code, err)
 }
 
 func objectSQLApplicationError(err error) error {
 	var planErr *reportmodel.ReportObjectSQLPlanError
 	if errors.As(err, &planErr) {
-		return &reportsdk.Error{StatusCode: 400, Code: planErr.Code, Params: planErr.Params, Cause: planErr}
+		return &reportsdk.Error{Class: reportsdk.ErrorClassBadRequest, Code: planErr.Code, Params: planErr.Params, Cause: planErr}
 	}
 	var applicationErr *apperror.AppError
 	if errors.As(err, &applicationErr) && strings.TrimSpace(applicationErr.Code) != "" {
-		return &reportsdk.Error{StatusCode: 400, Code: applicationErr.Code, Params: applicationErr.Params, Cause: applicationErr}
+		return &reportsdk.Error{Class: reportsdk.ErrorClassBadRequest, Code: applicationErr.Code, Params: applicationErr.Params, Cause: applicationErr}
 	}
-	return reportError(400, "backend.report.object_sql_invalid", err)
+	return reportError(reportErrorBadRequest, "backend.report.object_sql_invalid", err)
 }
 
 var _ reportsdk.Queries = (*QueryService)(nil)

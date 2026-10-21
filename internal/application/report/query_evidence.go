@@ -42,7 +42,7 @@ func (s *QueryService) Query(ctx context.Context, request reportmodel.ReportObje
 		return reportmodel.ReportQueryResult{}, err
 	}
 	if before.fingerprint() != after.fingerprint() || before.readScope != after.readScope {
-		return reportmodel.ReportQueryResult{}, reportError(409, "backend.report.source_changed", nil)
+		return reportmodel.ReportQueryResult{}, reportError(reportErrorConflict, "backend.report.source_changed", nil)
 	}
 	out := reportmodel.ReportQueryResult{Summary: summary, Source: reportmodel.ReportQuerySource{
 		ReportKey: after.report.Key, DefinitionVersion: canonicalHash(after.report), DataVersion: after.version,
@@ -67,7 +67,7 @@ func (s *QueryService) AuthorizeQueryResult(ctx context.Context, request reportm
 	}
 	proof := request.Result.Source.Proof
 	if len(proof) != sha256.Size*2 || !hmac.Equal([]byte(proof), []byte(s.resultProof(query, request.Result, state))) {
-		return reportError(409, "backend.report.result_stale_or_invalid", nil)
+		return reportError(reportErrorConflict, "backend.report.result_stale_or_invalid", nil)
 	}
 	return nil
 }
@@ -78,7 +78,7 @@ func (s *QueryService) queryEvidenceState(ctx context.Context, key string, autho
 
 func (s *QueryService) queryEvidenceStateForAction(ctx context.Context, key string, authority reportmodel.ReportAuthority, action string) (queryEvidenceState, error) {
 	if s == nil || s.sourceVersions == nil || len(s.cursorKey) == 0 || s.clock == nil {
-		return queryEvidenceState{}, reportError(500, "backend.report.evidence_unavailable", nil)
+		return queryEvidenceState{}, reportError(reportErrorInternal, "backend.report.evidence_unavailable", nil)
 	}
 	subject, definition, err := s.resolve(ctx, key, authority, action)
 	if err != nil {
@@ -102,7 +102,7 @@ func (s *QueryService) queryEvidenceStateForAction(ctx context.Context, key stri
 
 func normalizedEvidenceQuery(report reportmodel.ReportSchema, request reportmodel.ReportObjectSQLRequest) (reportmodel.ReportObjectSQLRequest, error) {
 	if report.ObjectSQLV1 == nil {
-		return reportmodel.ReportObjectSQLRequest{}, reportError(400, "backend.report.object_sql_not_enabled", nil)
+		return reportmodel.ReportObjectSQLRequest{}, reportError(reportErrorBadRequest, "backend.report.object_sql_not_enabled", nil)
 	}
 	parameters, err := reportobjectsql.NormalizeParameters(report.ObjectSQLV1.Parameters, request.Parameters)
 	if err != nil {
@@ -114,7 +114,7 @@ func normalizedEvidenceQuery(report reportmodel.ReportSchema, request reportmode
 		request.Page.PageSize = reportmodel.ReportPageDefaultSize
 	}
 	if request.Page.PageSize < 1 || request.Page.PageSize > reportmodel.ReportPageMaximumSize || len(request.Page.Cursor) > 16384 {
-		return reportmodel.ReportObjectSQLRequest{}, reportError(400, "backend.report.page_size_invalid", nil)
+		return reportmodel.ReportObjectSQLRequest{}, reportError(reportErrorBadRequest, "backend.report.page_size_invalid", nil)
 	}
 	return request, nil
 }

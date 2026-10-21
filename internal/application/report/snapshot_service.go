@@ -32,24 +32,24 @@ func NewSnapshotService(queries *QueryService, store reportpersistence.SnapshotR
 
 func (s *SnapshotService) Refresh(ctx context.Context, request reportmodel.ReportSnapshotRefreshRequest, authority reportmodel.ReportAuthority) (reportmodel.ReportSnapshot, error) {
 	if s == nil || s.queries == nil || s.store == nil || s.terminals == nil {
-		return reportmodel.ReportSnapshot{}, reportError(500, "backend.report.snapshot_unavailable", nil)
+		return reportmodel.ReportSnapshot{}, reportError(reportErrorInternal, "backend.report.snapshot_unavailable", nil)
 	}
 	subject, report, err := s.queries.resolve(ctx, request.ReportKey, authority, reportsdk.ActionReportSnapshotsRefresh)
 	if err != nil {
 		return reportmodel.ReportSnapshot{}, err
 	}
 	if report.Materialization == nil {
-		return reportmodel.ReportSnapshot{}, reportError(400, "backend.report.materialization_not_enabled", nil)
+		return reportmodel.ReportSnapshot{}, reportError(reportErrorBadRequest, "backend.report.materialization_not_enabled", nil)
 	}
 	idempotencyKey := strings.TrimSpace(request.IdempotencyKey)
 	if idempotencyKey == "" {
-		return reportmodel.ReportSnapshot{}, reportError(400, "backend.idempotency.key_required", nil)
+		return reportmodel.ReportSnapshot{}, reportError(reportErrorBadRequest, "backend.idempotency.key_required", nil)
 	}
 	executionReport := reportForDataPermissions(report, reportDataPermissionKeys(report))
 	accessScopeHash := reportSnapshotAccessScopeHash(subject, executionReport.RequiredPermissions)
 	leaseOwner, err := newSnapshotLeaseOwner()
 	if err != nil {
-		return reportmodel.ReportSnapshot{}, reportError(500, "backend.report.snapshot_claim_failed", err)
+		return reportmodel.ReportSnapshot{}, reportError(reportErrorInternal, "backend.report.snapshot_claim_failed", err)
 	}
 	now := s.clock().UTC()
 	claim, err := s.store.Claim(ctx, reportpersistence.SnapshotBeginRequest{
@@ -58,7 +58,7 @@ func (s *SnapshotService) Refresh(ctx context.Context, request reportmodel.Repor
 		LeaseExpiresAt: now.Add(2 * time.Minute).Format(time.RFC3339Nano),
 	})
 	if err != nil {
-		return reportmodel.ReportSnapshot{}, reportError(500, "backend.report.snapshot_begin_failed", err)
+		return reportmodel.ReportSnapshot{}, reportError(reportErrorInternal, "backend.report.snapshot_begin_failed", err)
 	}
 	if !claim.Acquired() {
 		return snapshotModel(claim.Snapshot)
@@ -98,27 +98,27 @@ func (s *SnapshotService) Refresh(ctx context.Context, request reportmodel.Repor
 		if sourceChanged {
 			code = "backend.report.snapshot_source_changed"
 		}
-		terminalErr = reportError(409, code, nil)
+		terminalErr = reportError(reportErrorConflict, code, nil)
 	}
 	if terminalErr != nil {
 		code := stableErrorCode(terminalErr, "backend.report.snapshot_refresh_failed")
 		failed := reportpersistence.SnapshotFailRequest{WorkspaceID: snapshot.WorkspaceID, ID: snapshot.ID, ExpectedStatus: "refreshing", ErrorCode: code, LeaseOwner: snapshot.LeaseOwner, FencingToken: snapshot.FencingToken}
 		if err := s.terminals.FailReportSnapshot(ctx, failed, snapshotNotification(report.Key, idempotencyKey, "failed", code, subject, s.clock())); err != nil {
-			return reportmodel.ReportSnapshot{}, reportError(409, "backend.report.snapshot_terminal_commit_failed", err)
+			return reportmodel.ReportSnapshot{}, reportError(reportErrorConflict, "backend.report.snapshot_terminal_commit_failed", err)
 		}
 		return reportmodel.ReportSnapshot{}, terminalErr
 	}
 	summary.ExecutionMode, summary.Snapshot = "snapshot", nil
 	encoded, err := json.Marshal(summary)
 	if err != nil {
-		return reportmodel.ReportSnapshot{}, reportError(500, "backend.report.snapshot_invalid", err)
+		return reportmodel.ReportSnapshot{}, reportError(reportErrorInternal, "backend.report.snapshot_invalid", err)
 	}
 	snapshot.Status, snapshot.Summary = "succeeded", encoded
 	snapshot.Watermark, snapshot.SourceVersions = version.Watermark, version.SourceVersions
 	snapshot.RefreshedAt = s.clock().UTC().Format(time.RFC3339Nano)
 	complete := reportpersistence.SnapshotCompleteRequest{Snapshot: snapshot, ExpectedStatus: "refreshing", LeaseOwner: snapshot.LeaseOwner, FencingToken: snapshot.FencingToken}
 	if err := s.terminals.CompleteReportSnapshot(ctx, complete, snapshotNotification(report.Key, idempotencyKey, "completed", "", subject, s.clock())); err != nil {
-		return reportmodel.ReportSnapshot{}, reportError(409, "backend.report.snapshot_terminal_commit_failed", err)
+		return reportmodel.ReportSnapshot{}, reportError(reportErrorConflict, "backend.report.snapshot_terminal_commit_failed", err)
 	}
 	return snapshotModel(snapshot)
 }
@@ -132,7 +132,7 @@ func snapshotModel(snapshot reportpersistence.Snapshot) (reportmodel.ReportSnaps
 	}
 	if len(snapshot.Summary) != 0 {
 		if err := json.Unmarshal(snapshot.Summary, &result.Summary); err != nil {
-			return reportmodel.ReportSnapshot{}, reportError(500, "backend.report.snapshot_invalid", err)
+			return reportmodel.ReportSnapshot{}, reportError(reportErrorInternal, "backend.report.snapshot_invalid", err)
 		}
 	}
 	return result, nil

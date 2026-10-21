@@ -19,7 +19,7 @@ func (s *QueryService) AuthorizeAnalysisResult(ctx context.Context, request mode
 	defer cancel()
 	raw, err := json.Marshal(request.Result)
 	if err != nil || len(raw) > analysisMaximumResultBytes+256 {
-		return reportError(400, "backend.report.analysis.result_invalid", err)
+		return reportError(reportErrorBadRequest, "backend.report.analysis.result_invalid", err)
 	}
 	state, err := s.analysisState(ctx, request.Request, authority)
 	if err != nil {
@@ -27,7 +27,7 @@ func (s *QueryService) AuthorizeAnalysisResult(ctx context.Context, request mode
 	}
 	proof := request.Result.Source.Proof
 	if len(proof) != sha256.Size*2 || !hmac.Equal([]byte(proof), []byte(s.analysisResultProof(request.Result, state))) {
-		return reportError(409, "backend.report.analysis.result_stale_or_invalid", nil)
+		return reportError(reportErrorConflict, "backend.report.analysis.result_stale_or_invalid", nil)
 	}
 	return ctx.Err()
 }

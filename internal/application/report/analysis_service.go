@@ -52,7 +52,7 @@ func (s *QueryService) RunAnalysis(ctx context.Context, request model.AnalysisRe
 		return model.AnalysisResult{}, err
 	}
 	if beforeFingerprint != after.fingerprint() || before.readScope != after.readScope {
-		return model.AnalysisResult{}, reportError(409, "backend.report.analysis.source_changed", nil)
+		return model.AnalysisResult{}, reportError(reportErrorConflict, "backend.report.analysis.source_changed", nil)
 	}
 	dataVersion := canonicalHash(after.versions)
 	if after.table != nil {
@@ -65,7 +65,7 @@ func (s *QueryService) RunAnalysis(ctx context.Context, request model.AnalysisRe
 	}, Visualization: visualization, Coverage: coverage, References: references}
 	raw, err := json.Marshal(result)
 	if err != nil || len(raw) > analysisMaximumResultBytes {
-		return model.AnalysisResult{}, reportError(422, "backend.report.analysis.result_limit_exceeded", err)
+		return model.AnalysisResult{}, reportError(reportErrorBadRequest, "backend.report.analysis.result_limit_exceeded", err)
 	}
 	result.Source.Proof = s.analysisResultProof(result, after)
 	if after.readScope != "" {
@@ -99,7 +99,7 @@ func (s *QueryService) analysisState(ctx context.Context, request model.Analysis
 
 func (s *QueryService) analysisStateForAction(ctx context.Context, request model.AnalysisRequest, authority model.ReportAuthority, action string) (analysisState, error) {
 	if s == nil || len(s.cursorKey) == 0 || s.clock == nil {
-		return analysisState{}, reportError(500, "backend.report.analysis.unavailable", nil)
+		return analysisState{}, reportError(reportErrorInternal, "backend.report.analysis.unavailable", nil)
 	}
 	subject, datasets, err := s.analysisDatasetsForAction(ctx, authority, action)
 	if err != nil {
@@ -113,7 +113,7 @@ func (s *QueryService) analysisStateForAction(ctx context.Context, request model
 		}
 	}
 	if dataset.Key == "" {
-		return analysisState{}, reportError(404, "backend.report.analysis.dataset_not_found", nil)
+		return analysisState{}, reportError(reportErrorNotFound, "backend.report.analysis.dataset_not_found", nil)
 	}
 	plan, err := analysis.Compile(request, dataset)
 	if err != nil {
@@ -125,7 +125,7 @@ func (s *QueryService) analysisStateForAction(ctx context.Context, request model
 	}
 	versions, ok := s.objectSQL.(modulehost.AnalysisSourceVersionReader)
 	if !ok {
-		return analysisState{}, reportError(500, "backend.report.analysis.source_version_unavailable", nil)
+		return analysisState{}, reportError(reportErrorInternal, "backend.report.analysis.source_version_unavailable", nil)
 	}
 	readScopes := []string{}
 	allReadScopes := true
@@ -143,11 +143,11 @@ func (s *QueryService) analysisStateForAction(ctx context.Context, request model
 			return analysisState{}, normalizeHostError(err, "backend.report.analysis.source_version_failed")
 		}
 		if len(version.SourceVersions) == 0 {
-			return analysisState{}, reportError(500, "backend.report.analysis.source_version_unavailable", nil)
+			return analysisState{}, reportError(reportErrorInternal, "backend.report.analysis.source_version_unavailable", nil)
 		}
 		for _, v := range version.SourceVersions {
 			if v == "" {
-				return analysisState{}, reportError(500, "backend.report.analysis.source_version_unavailable", nil)
+				return analysisState{}, reportError(reportErrorInternal, "backend.report.analysis.source_version_unavailable", nil)
 			}
 		}
 		state.versions = append(state.versions, version)
@@ -170,16 +170,13 @@ func (s *QueryService) analysisStateForAction(ctx context.Context, request model
 func analysisError(err error) error {
 	var failure *analysis.Error
 	if !errors.As(err, &failure) {
-		return reportError(500, "backend.report.analysis.failed", err)
+		return reportError(reportErrorInternal, "backend.report.analysis.failed", err)
 	}
-	status := 400
+	class := reportErrorBadRequest
 	if failure.Code == "result_invalid" {
-		status = 502
+		class = reportErrorUnavailable
 	}
-	if failure.Code == "result_limit_exceeded" || failure.Code == "arithmetic_limit" {
-		status = 422
-	}
-	return reportError(status, "backend.report.analysis."+failure.Code, err)
+	return reportError(class, "backend.report.analysis."+failure.Code, err)
 }
 
 type analysisCatalogSource struct {
@@ -189,7 +186,7 @@ type analysisCatalogSource struct {
 
 func (s *QueryService) analysisSources() ([]analysisCatalogSource, error) {
 	if s == nil || len(s.cursorKey) == 0 {
-		return nil, reportError(500, "backend.report.analysis.unavailable", nil)
+		return nil, reportError(reportErrorInternal, "backend.report.analysis.unavailable", nil)
 	}
 	sources := []analysisCatalogSource{}
 	if host, ok := s.objectSQL.(modulehost.AnalysisSources); ok {
@@ -199,7 +196,7 @@ func (s *QueryService) analysisSources() ([]analysisCatalogSource, error) {
 		sources = append(sources, analysisCatalogSource{source: s.tables, kind: "table_file"})
 	}
 	if len(sources) == 0 {
-		return nil, reportError(500, "backend.report.analysis.unavailable", nil)
+		return nil, reportError(reportErrorInternal, "backend.report.analysis.unavailable", nil)
 	}
 	return sources, nil
 }

@@ -19,14 +19,14 @@ func (s *QueryService) AuthorizeCatalogRead(ctx context.Context, in model.Report
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if s == nil || s.definitions == nil || len(s.cursorKey) == 0 || len(in.Result.Reports) > model.ReportCatalogMaximumSize {
-		return reportError(503, "backend.report.catalog_unavailable", nil)
+		return reportError(reportErrorUnavailable, "backend.report.catalog_unavailable", nil)
 	}
 	subject, err := s.resolveSubject(ctx, a)
 	if err != nil {
 		return err
 	}
 	if !subject.HasPermission(sdk.ActionReportResultsRead) {
-		return reportError(403, "backend.permission.denied", nil)
+		return reportError(reportErrorForbidden, "backend.permission.denied", nil)
 	}
 	definitions, err := s.definitions.ReportDefinitions(ctx)
 	if err != nil {
@@ -35,7 +35,7 @@ func (s *QueryService) AuthorizeCatalogRead(ctx context.Context, in model.Report
 	definitions = append([]model.ReportSchema{}, definitions...)
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Key < definitions[j].Key })
 	if !validReadProof(in.Result.ReadProof, s.catalogReadProof(in.Request, in.Result, definitions, subject)) {
-		return reportError(409, "backend.report.result_stale_or_invalid", nil)
+		return reportError(reportErrorConflict, "backend.report.result_stale_or_invalid", nil)
 	}
 	// The signature proves the original page and cursor. Current metadata is
 	// unchanged, but every disclosed item's audience, sources and fields still
@@ -61,7 +61,7 @@ func (s *QueryService) AuthorizeAnalysisCatalogRead(ctx context.Context, in mode
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if s == nil || len(s.cursorKey) == 0 || len(in.Result.Datasets) > 50 {
-		return reportError(503, "backend.report.analysis.unavailable", nil)
+		return reportError(reportErrorUnavailable, "backend.report.analysis.unavailable", nil)
 	}
 	subject, datasets, err := s.analysisDatasetsForAction(ctx, a, sdk.ActionReportResultsRead)
 	if err != nil {
@@ -77,7 +77,7 @@ func (s *QueryService) AuthorizeAnalysisCatalogRead(ctx context.Context, in mode
 		datasets = filtered
 	}
 	if !validReadProof(in.Result.ReadProof, s.analysisCatalogReadProof(in.Request, in.Result, datasets, subject)) {
-		return reportError(409, "backend.report.analysis.result_stale_or_invalid", nil)
+		return reportError(reportErrorConflict, "backend.report.analysis.result_stale_or_invalid", nil)
 	}
 	return ctx.Err()
 }

@@ -23,7 +23,7 @@ type evidenceExecutor struct {
 
 func (e *evidenceExecutor) AuthorizeReportObjectSQLPlan(ctx context.Context, r reportmodel.ReportSchema, p reportmodel.ReportObjectSQLPlan, s reportmodel.ReportSubject) error {
 	if e.deny[r.Key] {
-		return reportError(403, "test.field_denied", nil)
+		return reportError(reportErrorForbidden, "test.field_denied", nil)
 	}
 	return e.applicationTestObjectSQL.AuthorizeReportObjectSQLPlan(ctx, r, p, s)
 }

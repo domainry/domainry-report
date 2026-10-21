@@ -193,7 +193,7 @@ func (h *integrationHost) ResolveReportSubject(_ context.Context, authority repo
 	case "workspace-a-action-only":
 		return integrationSubject("workspace-a", "user-action", reportsdk.ActionReportSummaryGet), nil
 	default:
-		return reportmodel.ReportSubject{}, &reportsdk.Error{StatusCode: 401, Code: "auth.token_invalid"}
+		return reportmodel.ReportSubject{}, &reportsdk.Error{Class: reportsdk.ErrorClassForbidden, Code: "auth.token_invalid"}
 	}
 }
 
@@ -222,18 +222,18 @@ func integrationSaleObject() reportmodel.ReportSourceObject {
 
 func (h *integrationHost) ResolveReportObjectSQLSources(_ context.Context, report reportmodel.ReportSchema, subject reportmodel.ReportSubject) (map[string]reportmodel.ReportSourceObject, error) {
 	if report.ObjectSQLV1 == nil || !subject.HasAllPermissions(report.RequiredPermissions) {
-		return nil, &reportsdk.Error{StatusCode: 403, Code: "backend.permission.denied"}
+		return nil, &reportsdk.Error{Class: reportsdk.ErrorClassForbidden, Code: "backend.permission.denied"}
 	}
 	return map[string]reportmodel.ReportSourceObject{"sale": integrationSaleObject()}, nil
 }
 
 func (*integrationHost) AuthorizeReportObjectSQLPlan(_ context.Context, report reportmodel.ReportSchema, plan reportmodel.ReportObjectSQLPlan, subject reportmodel.ReportSubject) error {
 	if !subject.HasAllPermissions(report.RequiredPermissions) || len(plan.Sources) != 1 || plan.Sources[0].ObjectKey != "sale" {
-		return &reportsdk.Error{StatusCode: 403, Code: "backend.permission.denied"}
+		return &reportsdk.Error{Class: reportsdk.ErrorClassForbidden, Code: "backend.permission.denied"}
 	}
 	for _, field := range plan.Sources[0].Fields {
 		if field != "id" && field != "region" && field != "status" && field != "amount" {
-			return &reportsdk.Error{StatusCode: 403, Code: "backend.report.object_sql_field_authorization_failed"}
+			return &reportsdk.Error{Class: reportsdk.ErrorClassForbidden, Code: "backend.report.object_sql_field_authorization_failed"}
 		}
 	}
 	return nil
@@ -340,7 +340,7 @@ func (h *integrationHost) ExecuteReportObjectSQL(ctx context.Context, request re
 
 func (h *integrationHost) ReadReportSourceVersion(ctx context.Context, report reportmodel.ReportSchema, subject reportmodel.ReportSubject) (reportmodel.ReportSnapshotSourceVersion, error) {
 	if !subject.HasAllPermissions(report.RequiredPermissions) {
-		return reportmodel.ReportSnapshotSourceVersion{}, &reportsdk.Error{StatusCode: 403, Code: "backend.permission.denied"}
+		return reportmodel.ReportSnapshotSourceVersion{}, &reportsdk.Error{Class: reportsdk.ErrorClassForbidden, Code: "backend.permission.denied"}
 	}
 	statement, arguments, err := ormquery.NewWorkspaceSelectBuilder(h.dialect, "host_sales", subject.Principal.WorkspaceID).
 		Columns("id", "updated_at").OrderBy(ormquery.Ascending("id")).Build()
@@ -380,14 +380,14 @@ func (h *integrationHost) AppendReportExecution(ctx context.Context, report repo
 
 func (*integrationHost) AuthorizeReportExportSource(_ context.Context, objectKey string, subject reportmodel.ReportSubject) error {
 	if !subject.HasPermission(strings.TrimSpace(objectKey) + ".export") {
-		return &reportsdk.Error{StatusCode: 403, Code: "backend.permission.denied"}
+		return &reportsdk.Error{Class: reportsdk.ErrorClassForbidden, Code: "backend.permission.denied"}
 	}
 	return nil
 }
 
 func (*integrationHost) AuthorizeReportExportField(_ context.Context, objectKey, fieldKey string, subject reportmodel.ReportSubject) (bool, error) {
 	if !subject.HasPermission(strings.TrimSpace(objectKey)+".export") || strings.TrimSpace(fieldKey) == "" {
-		return false, &reportsdk.Error{StatusCode: 403, Code: "backend.permission.denied"}
+		return false, &reportsdk.Error{Class: reportsdk.ErrorClassForbidden, Code: "backend.permission.denied"}
 	}
 	return false, nil
 }

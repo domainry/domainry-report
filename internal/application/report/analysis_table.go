@@ -14,7 +14,7 @@ import (
 func (s *QueryService) analysisTableState(ctx context.Context, state analysisState) (analysisState, error) {
 	host := s.tables
 	if host == nil {
-		return analysisState{}, reportError(503, "backend.report.analysis.table_unavailable", nil)
+		return analysisState{}, reportError(reportErrorUnavailable, "backend.report.analysis.table_unavailable", nil)
 	}
 	// Validate typed filter values before asking the owner to open any stream.
 	if _, err := analysis.NewTableAccumulator(state.plan); err != nil {
@@ -25,16 +25,16 @@ func (s *QueryService) analysisTableState(ctx context.Context, state analysisSta
 		return analysisState{}, normalizeHostError(err, "backend.report.analysis.source_version_failed")
 	}
 	if !version.Complete {
-		return analysisState{}, reportError(422, "backend.report.analysis.source_incomplete", nil)
+		return analysisState{}, reportError(reportErrorBadRequest, "backend.report.analysis.source_incomplete", nil)
 	}
 	if version.DatasetKey != state.plan.Dataset.Key || version.DefinitionVersion != state.plan.Dataset.Version || strings.TrimSpace(version.DataVersion) == "" || len(version.DataVersion) > 256 || version.Rows < 0 {
-		return analysisState{}, reportError(502, "backend.report.analysis.result_invalid", nil)
+		return analysisState{}, reportError(reportErrorUnavailable, "backend.report.analysis.result_invalid", nil)
 	}
 	if digest, err := hex.DecodeString(version.ContentSHA256); err != nil || len(digest) != sha256.Size || version.ContentSHA256 != strings.ToLower(version.ContentSHA256) {
-		return analysisState{}, reportError(502, "backend.report.analysis.result_invalid", nil)
+		return analysisState{}, reportError(reportErrorUnavailable, "backend.report.analysis.result_invalid", nil)
 	}
 	if version.Rows > analysis.MaximumTableRows {
-		return analysisState{}, reportError(422, "backend.report.analysis.result_limit_exceeded", nil)
+		return analysisState{}, reportError(reportErrorBadRequest, "backend.report.analysis.result_limit_exceeded", nil)
 	}
 	state.table = &version
 	// This owner API reauthorizes every field and attests every projected cell
@@ -81,7 +81,7 @@ func (s *QueryService) evaluateAnalysisTable(ctx context.Context, state analysis
 		return analysis.Evaluation{}, normalizeHostError(err, "backend.report.analysis.execution_failed")
 	}
 	if version != *state.table || acc.Rows() != version.Rows || hex.EncodeToString(digest.Sum(nil)) != version.ContentSHA256 {
-		return analysis.Evaluation{}, reportError(409, "backend.report.analysis.source_changed", nil)
+		return analysis.Evaluation{}, reportError(reportErrorConflict, "backend.report.analysis.source_changed", nil)
 	}
 	out, err := acc.Evaluate()
 	if err != nil {

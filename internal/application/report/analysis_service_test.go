@@ -39,7 +39,7 @@ func (e *analysisExecutor) ResolveReportObjectSQLSources(ctx context.Context, r 
 }
 func (e *analysisExecutor) AuthorizeReportObjectSQLPlan(ctx context.Context, r model.ReportSchema, p model.ReportObjectSQLPlan, s model.ReportSubject) error {
 	if e.denied {
-		return reportError(403, "test.field_denied", nil)
+		return reportError(reportErrorForbidden, "test.field_denied", nil)
 	}
 	return e.applicationTestObjectSQL.AuthorizeReportObjectSQLPlan(ctx, r, p, s)
 }

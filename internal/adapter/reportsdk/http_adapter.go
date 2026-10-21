@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/apperror"
 	"github.com/domainry/domainry-foundation/httpresponse"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
@@ -127,7 +128,7 @@ func (s *reportHTTPAdapter) queryObjectSQL(w http.ResponseWriter, r *http.Reques
 		Cursor     string         `json:"cursor,omitempty"`
 	}
 	if err := decodeReportJSON(w, r, &request); err != nil {
-		writeReportError(w, &sdk.Error{StatusCode: 400, Code: "backend.bad_request", Cause: err})
+		writeReportError(w, &sdk.Error{Class: sdk.ErrorClassBadRequest, Code: "backend.bad_request", Cause: err})
 		return
 	}
 	if request.Parameters == nil {
@@ -157,7 +158,7 @@ func (s *reportHTTPAdapter) prepareExport(w http.ResponseWriter, r *http.Request
 		RetryOfJobID string                               `json:"retry_of_job_id,omitempty"`
 	}
 	if err := decodeReportJSON(w, r, &request); err != nil {
-		writeReportError(w, &sdk.Error{StatusCode: 400, Code: "backend.bad_request", Cause: err})
+		writeReportError(w, &sdk.Error{Class: sdk.ErrorClassBadRequest, Code: "backend.bad_request", Cause: err})
 		return
 	}
 	prepareRequest := reportmodel.ReportExportPrepareRequest{
@@ -187,7 +188,7 @@ func (s *reportHTTPAdapter) prepareExport(w http.ResponseWriter, r *http.Request
 
 func writePreparedReportExport(w http.ResponseWriter, job reportmodel.ReportExportJob, artifact *reportmodel.ReportExportArtifact) {
 	if artifact == nil || artifact.Content == nil {
-		writeReportError(w, &sdk.Error{StatusCode: http.StatusInternalServerError, Code: "backend.report.export_artifact_unavailable"})
+		writeReportError(w, &sdk.Error{Class: sdk.ErrorClassInternal, Code: "backend.report.export_artifact_unavailable"})
 		return
 	}
 	defer artifact.Content.Close()
@@ -240,7 +241,7 @@ func reportPageRequest(r *http.Request) (reportmodel.ReportPageRequest, error) {
 	}
 	pageSize, err := strconv.Atoi(raw)
 	if err != nil {
-		return reportmodel.ReportPageRequest{}, &sdk.Error{StatusCode: 400, Code: "backend.report.page_size_invalid", Cause: err}
+		return reportmodel.ReportPageRequest{}, &sdk.Error{Class: sdk.ErrorClassBadRequest, Code: "backend.report.page_size_invalid", Cause: err}
 	}
 	return reportmodel.ReportPageRequest{PageSize: pageSize, Cursor: strings.TrimSpace(r.URL.Query().Get("cursor"))}, nil
 }
@@ -266,18 +267,34 @@ func writeReportJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func writeReportError(w http.ResponseWriter, err error) {
-	status, code, message, params := http.StatusInternalServerError, "backend.internal_error", "", map[string]string(nil)
+	status, code, message, params := reportHTTPStatus(apperror.KindOf(err)), "backend.internal_error", "", map[string]string(nil)
 	var stable *sdk.Error
 	if errors.As(err, &stable) {
-		if stable.StatusCode >= 400 && stable.StatusCode <= 599 {
-			status = stable.StatusCode
-		}
 		if strings.TrimSpace(stable.Code) != "" {
 			code = stable.Code
 		}
 		message, params = stable.Message, stable.Params
 	}
 	httpresponse.WriteError(w, nil, httpresponse.Failure{Status: status, Code: code, Message: message, Params: params, Cause: err})
+}
+
+func reportHTTPStatus(kind apperror.ErrorKind) int {
+	switch kind {
+	case apperror.KindBadRequest:
+		return http.StatusBadRequest
+	case apperror.KindForbidden:
+		return http.StatusForbidden
+	case apperror.KindNotFound:
+		return http.StatusNotFound
+	case apperror.KindConflict:
+		return http.StatusConflict
+	case apperror.KindRateLimited:
+		return http.StatusTooManyRequests
+	case apperror.KindUnavailable:
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 var _ modulehttp.Adapter = (*reportHTTPAdapter)(nil)

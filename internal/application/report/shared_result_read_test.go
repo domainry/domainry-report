@@ -14,7 +14,7 @@ type sharedReadSubjects struct{}
 
 func (sharedReadSubjects) ResolveReportSubject(_ context.Context, a model.ReportAuthority) (model.ReportSubject, error) {
 	if a.Subject == nil {
-		return model.ReportSubject{}, reportError(401, "auth.token_required", nil)
+		return model.ReportSubject{}, reportError(reportErrorForbidden, "auth.token_required", nil)
 	}
 	return *a.Subject, nil
 }
@@ -26,7 +26,7 @@ type sharedQueryScopeFixture struct {
 
 func (h *sharedQueryScopeFixture) AuthorizeSharedReportResultScope(_ context.Context, _ model.ReportSchema, producer, reader model.ReportSubject) error {
 	if h.denied || producer.Principal.UserID != "producer" || reader.Principal.UserID != "reader" {
-		return reportError(403, "backend.permission.denied", nil)
+		return reportError(reportErrorForbidden, "backend.permission.denied", nil)
 	}
 	return nil
 }
@@ -47,7 +47,7 @@ func (h *restrictedSharedAnalysisCatalog) ReportAnalysisSources(ctx context.Cont
 		return datasets, err
 	}
 	if h.restriction == "unavailable" {
-		return nil, reportError(503, "test.catalog_unavailable", nil)
+		return nil, reportError(reportErrorUnavailable, "test.catalog_unavailable", nil)
 	}
 	if h.restriction == "dataset" {
 		return nil, nil
@@ -69,7 +69,7 @@ func (h *restrictedSharedAnalysisCatalog) ReportAnalysisSources(ctx context.Cont
 
 func (h *sharedAnalysisScopeFixture) AuthorizeSharedReportResultScope(_ context.Context, _ model.ReportSchema, producer, reader model.ReportSubject) error {
 	if h.denied || producer.Principal.UserID != "producer" || reader.Principal.UserID != "reader" {
-		return reportError(403, "backend.permission.denied", nil)
+		return reportError(reportErrorForbidden, "backend.permission.denied", nil)
 	}
 	return nil
 }
@@ -204,11 +204,11 @@ func TestSharedAnalysisAuthenticatedOriginalSpecClassifiesHiddenReaderSourcesAsD
 			h.restriction = restriction
 			var failure *sdk.Error
 			err := s.AuthorizeSharedAnalysisResultRead(t.Context(), model.AnalysisResultAuthorization{Request: request, Result: result}, reader, producer)
-			want := 403
+			want := sdk.ErrorClassForbidden
 			if restriction == "unavailable" {
-				want = 503
+				want = sdk.ErrorClassUnavailable
 			}
-			if !errors.As(err, &failure) || failure.StatusCode != want {
+			if !errors.As(err, &failure) || failure.Class != want {
 				t.Fatal("authorized catalog restriction had the wrong classification", err)
 			}
 		})
@@ -217,12 +217,12 @@ func TestSharedAnalysisAuthenticatedOriginalSpecClassifiesHiddenReaderSourcesAsD
 	altered := result
 	altered.Source.Complete = !altered.Source.Complete
 	var failure *sdk.Error
-	if err := s.AuthorizeSharedAnalysisResultRead(t.Context(), model.AnalysisResultAuthorization{Request: request, Result: altered}, reader, producer); !errors.As(err, &failure) || failure.StatusCode != 409 {
+	if err := s.AuthorizeSharedAnalysisResultRead(t.Context(), model.AnalysisResultAuthorization{Request: request, Result: altered}, reader, producer); !errors.As(err, &failure) || failure.Class != sdk.ErrorClassConflict {
 		t.Fatal("hidden field classification bypassed original proof validation", err)
 	}
 	invalid := request
 	invalid.GroupBy = []string{"not_a_source_field"}
-	if err := s.AuthorizeSharedAnalysisResultRead(t.Context(), model.AnalysisResultAuthorization{Request: invalid, Result: result}, reader, producer); !errors.As(err, &failure) || failure.StatusCode != 400 {
+	if err := s.AuthorizeSharedAnalysisResultRead(t.Context(), model.AnalysisResultAuthorization{Request: invalid, Result: result}, reader, producer); !errors.As(err, &failure) || failure.Class != sdk.ErrorClassBadRequest {
 		t.Fatal("a truly invalid original specification was misclassified as permission denial", err)
 	}
 	if len(executor.requests) != 1 {
@@ -267,7 +267,7 @@ func TestSharedResultReadRequiresOwnerScopeAttestation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var unavailable *sdk.Error
-	if err := s.AuthorizeSharedQueryResultRead(t.Context(), model.ReportQueryResultAuthorization{Query: query, Result: result}, reader, producer); !errors.As(err, &unavailable) || unavailable.StatusCode != 503 {
+	if err := s.AuthorizeSharedQueryResultRead(t.Context(), model.ReportQueryResultAuthorization{Query: query, Result: result}, reader, producer); !errors.As(err, &unavailable) || unavailable.Class != sdk.ErrorClassUnavailable {
 		t.Fatal("missing owner scope was not classified unavailable", err)
 	}
 	analysis, _, _, _, request := analysisFixture()
@@ -278,7 +278,7 @@ func TestSharedResultReadRequiresOwnerScopeAttestation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := analysis.AuthorizeSharedAnalysisResultRead(t.Context(), model.AnalysisResultAuthorization{Request: request, Result: computed}, reader, producer); !errors.As(err, &unavailable) || unavailable.StatusCode != 503 {
+	if err := analysis.AuthorizeSharedAnalysisResultRead(t.Context(), model.AnalysisResultAuthorization{Request: request, Result: computed}, reader, producer); !errors.As(err, &unavailable) || unavailable.Class != sdk.ErrorClassUnavailable {
 		t.Fatal("missing analysis scope was not classified unavailable", err)
 	}
 }

@@ -36,7 +36,7 @@ func (h *analysisTableHost) ReadReportAnalysisTableVersion(ctx context.Context, 
 	h.checks++
 	h.fields = append([]string{}, fields...)
 	if h.denied || key != h.dataset.Key || subject.Principal.UserID != "user-1" || subject.Principal.WorkspaceID != "workspace-1" {
-		return modulehost.AnalysisTableVersion{}, reportError(403, "backend.permission.denied", nil)
+		return modulehost.AnalysisTableVersion{}, reportError(reportErrorForbidden, "backend.permission.denied", nil)
 	}
 	v := h.version
 	digest := sha256.New()

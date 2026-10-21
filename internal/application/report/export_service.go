@@ -41,10 +41,10 @@ func (s *ExportService) PrepareForDelivery(ctx context.Context, request reportmo
 
 func (s *ExportService) prepare(ctx context.Context, request reportmodel.ReportExportPrepareRequest, authority reportmodel.ReportAuthority, deliver bool) (reportmodel.ReportExportPreparation, error) {
 	if s == nil || s.queries == nil || s.gateway == nil {
-		return reportmodel.ReportExportPreparation{}, reportError(500, "backend.report.export_unavailable", nil)
+		return reportmodel.ReportExportPreparation{}, reportError(reportErrorInternal, "backend.report.export_unavailable", nil)
 	}
 	if strings.TrimSpace(request.IdempotencyKey) == "" {
-		return reportmodel.ReportExportPreparation{}, reportError(400, "backend.idempotency.key_required", nil)
+		return reportmodel.ReportExportPreparation{}, reportError(reportErrorBadRequest, "backend.idempotency.key_required", nil)
 	}
 	subject, resolved, _, err := s.resolveExecution(ctx, reportmodel.ReportExportExecutionRequest{
 		ReportKey: request.ReportKey, ObjectKey: request.ObjectKey, Scope: request.Scope,
@@ -98,7 +98,7 @@ func (s *ExportService) SourceVersion(ctx context.Context, request reportmodel.R
 		return reportmodel.ReportSnapshotSourceVersion{}, err
 	}
 	if s.queries == nil || s.queries.sourceVersions == nil {
-		return reportmodel.ReportSnapshotSourceVersion{}, reportError(500, "backend.report.source_version_unavailable", nil)
+		return reportmodel.ReportSnapshotSourceVersion{}, reportError(reportErrorInternal, "backend.report.source_version_unavailable", nil)
 	}
 	version, err := s.queries.sourceVersions.ReadReportSourceVersion(ctx, scoped, subject)
 	if err != nil {
@@ -109,7 +109,7 @@ func (s *ExportService) SourceVersion(ctx context.Context, request reportmodel.R
 
 func (s *ExportService) resolveExecution(ctx context.Context, request reportmodel.ReportExportExecutionRequest, authority reportmodel.ReportAuthority) (reportmodel.ReportSubject, reportmodel.ReportExportExecution, reportmodel.ReportSchema, error) {
 	if s == nil || s.queries == nil || s.authorizer == nil {
-		return reportmodel.ReportSubject{}, reportmodel.ReportExportExecution{}, reportmodel.ReportSchema{}, reportError(500, "backend.report.export_unavailable", nil)
+		return reportmodel.ReportSubject{}, reportmodel.ReportExportExecution{}, reportmodel.ReportSchema{}, reportError(reportErrorInternal, "backend.report.export_unavailable", nil)
 	}
 	subject, definition, err := s.resolveCurrent(ctx, request.ReportKey, request.ObjectKey, authority)
 	if err != nil {
@@ -163,27 +163,12 @@ func exportApplicationError(err error) error {
 	}
 	var app *apperror.AppError
 	if errors.As(err, &app) {
-		status := 500
-		switch app.Kind {
-		case apperror.KindBadRequest:
-			status = 400
-		case apperror.KindForbidden:
-			status = 403
-		case apperror.KindNotFound:
-			status = 404
-		case apperror.KindConflict:
-			status = 409
-		case apperror.KindRateLimited:
-			status = 429
-		case apperror.KindUnavailable:
-			status = 503
-		}
-		return &reportsdk.Error{StatusCode: status, Code: app.Code, Params: app.Params, Cause: err}
+		return &reportsdk.Error{Class: reportsdk.ErrorClass(app.Kind), Code: app.Code, Params: app.Params, Cause: err}
 	}
 	if code := apperror.CodeOf(err); code != "" {
-		return reportError(400, code, err)
+		return reportError(reportErrorBadRequest, code, err)
 	}
-	return reportError(400, "backend.report.export_scope_invalid", err)
+	return reportError(reportErrorBadRequest, "backend.report.export_scope_invalid", err)
 }
 
 func (s *ExportService) resolveCurrent(ctx context.Context, reportKey, objectKey string, authority reportmodel.ReportAuthority) (reportmodel.ReportSubject, reportmodel.ReportExportDefinition, error) {
@@ -192,17 +177,17 @@ func (s *ExportService) resolveCurrent(ctx context.Context, reportKey, objectKey
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportDefinition{}, err
 	}
 	if !reportIncludesExportObject(report, objectKey) {
-		return reportmodel.ReportSubject{}, reportmodel.ReportExportDefinition{}, reportError(400, "backend.report.object_not_in_report", nil)
+		return reportmodel.ReportSubject{}, reportmodel.ReportExportDefinition{}, reportError(reportErrorBadRequest, "backend.report.object_not_in_report", nil)
 	}
 	if s.definitions == nil {
-		return reportmodel.ReportSubject{}, reportmodel.ReportExportDefinition{}, reportError(500, "backend.report.export_unavailable", nil)
+		return reportmodel.ReportSubject{}, reportmodel.ReportExportDefinition{}, reportError(reportErrorInternal, "backend.report.export_unavailable", nil)
 	}
 	control, ok, err := s.definitions.ReportExportControl(ctx, report.Key, objectKey)
 	if err != nil {
 		return reportmodel.ReportSubject{}, reportmodel.ReportExportDefinition{}, normalizeHostError(err, "backend.report.definition_read_failed")
 	}
 	if !ok {
-		return reportmodel.ReportSubject{}, reportmodel.ReportExportDefinition{}, reportError(400, "backend.report.export_control_not_found", nil)
+		return reportmodel.ReportSubject{}, reportmodel.ReportExportDefinition{}, reportError(reportErrorBadRequest, "backend.report.export_control_not_found", nil)
 	}
 	return subject, reportmodel.ReportExportDefinition{Report: report, Control: control}, nil
 }
