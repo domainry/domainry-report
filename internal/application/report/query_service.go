@@ -362,7 +362,7 @@ func (s *QueryService) readSnapshot(ctx context.Context, report reportmodel.Repo
 		lag = 0
 	}
 	summary.ExecutionMode = "snapshot"
-	summary.Snapshot = &reportmodel.ReportSnapshotFreshness{SnapshotID: snapshot.ID, Watermark: snapshot.Watermark, SourceVersions: snapshot.SourceVersions, RefreshedAt: snapshot.RefreshedAt, LagSeconds: int64(lag / time.Second), Stale: report.Materialization.MaximumLagSeconds > 0 && lag > time.Duration(report.Materialization.MaximumLagSeconds)*time.Second}
+	summary.Snapshot = &reportmodel.ReportSnapshotFreshness{SnapshotID: snapshot.SnapshotID, Watermark: snapshot.Watermark, SourceVersions: snapshot.SourceVersions, RefreshedAt: snapshot.RefreshedAt, LagSeconds: int64(lag / time.Second), Stale: report.Materialization.MaximumLagSeconds > 0 && lag > time.Duration(report.Materialization.MaximumLagSeconds)*time.Second}
 	return summary, nil
 }
 

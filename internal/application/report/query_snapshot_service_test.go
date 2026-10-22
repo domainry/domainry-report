@@ -43,7 +43,7 @@ type applicationTestExportGateway struct {
 
 func (g *applicationTestExportGateway) PrepareReportExport(_ context.Context, request reportmodel.ReportExportPrepareRequest, report reportmodel.ReportSchema, control reportmodel.ReportExportControlSchema, _ reportmodel.ReportSubject) (reportmodel.ReportExportJob, error) {
 	g.request, g.report, g.control = request, report, control
-	return reportmodel.ReportExportJob{ID: "job-1"}, nil
+	return reportmodel.ReportExportJob{JobID: "job-1"}, nil
 }
 
 type applicationTestExportAuthorization struct{ authorizedSources *[]string }
@@ -118,7 +118,7 @@ func TestExportServiceUsesOnlyObjectSQLDefinition(t *testing.T) {
 	authority := reportmodel.ReportAuthority{AccessToken: "token"}
 	scope := reportmodel.ReportExportScopeRequest{Purpose: "evidence", FieldProjection: []string{"category", "count"}}
 	job, err := service.Prepare(t.Context(), reportmodel.ReportExportPrepareRequest{ReportKey: report.Key, ObjectKey: "event", AuditID: "audit-1", IdempotencyKey: "request-1", Scope: scope}, authority)
-	if err != nil || job.ID != "job-1" || gateway.report.ObjectSQLV1 == nil {
+	if err != nil || job.JobID != "job-1" || gateway.report.ObjectSQLV1 == nil {
 		t.Fatalf("job=%#v report=%#v err=%v", job, gateway.report, err)
 	}
 	request := reportmodel.ReportExportExecutionRequest{ReportKey: report.Key, ObjectKey: "event", Scope: scope, Page: reportmodel.ReportPageRequest{PageSize: 2}}
@@ -215,7 +215,7 @@ func TestSnapshotServiceExecutesObjectSQL(t *testing.T) {
 	executor := &applicationTestObjectSQL{}
 	queries := &QueryService{subjects: applicationTestSubjects{subject: subject}, definitions: applicationTestDefinitions{reports: []reportmodel.ReportSchema{report}}, objectSQL: executor, sourceVersions: versions, cursorKey: []byte("report-test-cursor-key"), clock: time.Now}
 	accessScopeHash := reportSnapshotAccessScopeHash(subject, reportDataPermissionKeys(report))
-	store := &applicationTestSnapshotStore{claim: reportpersistence.SnapshotClaim{Disposition: reportpersistence.SnapshotClaimAcquired, Snapshot: reportpersistence.Snapshot{ID: "snapshot-1", WorkspaceID: "workspace-1", ReportKey: report.Key, AccessScopeHash: accessScopeHash, IdempotencyKey: "refresh-1", Status: "refreshing", StartedAt: "2026-01-01T00:00:00Z", FencingToken: 7}}}
+	store := &applicationTestSnapshotStore{claim: reportpersistence.SnapshotClaim{Disposition: reportpersistence.SnapshotClaimAcquired, Snapshot: reportpersistence.Snapshot{ID: 1, SnapshotID: "rptsnap_0123456789abcdef0123456789abcdef", WorkspaceID: "workspace-1", ReportKey: report.Key, AccessScopeHash: accessScopeHash, IdempotencyKey: "refresh-1", Status: "refreshing", StartedAt: "2026-01-01T00:00:00Z", FencingToken: 7}}}
 	terminals := &applicationTestTerminals{}
 	snapshot, err := NewSnapshotService(queries, store, terminals, func() time.Time { return time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC) }).Refresh(t.Context(), reportmodel.ReportSnapshotRefreshRequest{ReportKey: report.Key, IdempotencyKey: "refresh-1"}, reportmodel.ReportAuthority{AccessToken: "token"})
 	if err != nil || snapshot.Status != "succeeded" || terminals.complete == nil || len(executor.requests) != 1 {

@@ -41,7 +41,9 @@ func TestSchemaOwnershipMatchesEveryFreshReportTableAndPrimaryKey(t *testing.T) 
 		for index, column := range table.PrimaryKey {
 			quoted[index] = `"` + column + `"`
 		}
-		if primaryKey := "PRIMARY KEY (" + strings.Join(quoted, ", ") + ")"; !strings.Contains(statement, primaryKey) {
+		primaryKey := "PRIMARY KEY (" + strings.Join(quoted, ", ") + ")"
+		inlinePrimaryKey := len(table.PrimaryKey) == 1 && strings.Contains(statement, `"`+table.PrimaryKey[0]+`" INTEGER PRIMARY KEY AUTOINCREMENT`)
+		if !strings.Contains(statement, primaryKey) && !inlinePrimaryKey {
 			t.Fatalf("Report table %s ownership primary key %v does not match DDL: %s", table.Name, table.PrimaryKey, statement)
 		}
 	}

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	shareddefinition "github.com/domainry/domainry-foundation/definition"
+	"github.com/domainry/domainry-foundation/entityid"
 	"github.com/domainry/domainry-foundation/schemaownership"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	notificationmodel "github.com/domainry/domainry-notification-sdk/contract"
@@ -428,7 +429,7 @@ func (h *integrationHost) commitSnapshotTerminal(ctx context.Context, operation 
 
 func (h *integrationHost) insertNotification(ctx context.Context, notification notificationmodel.NotificationIntent) error {
 	statement, arguments, err := ormquery.NewWorkspaceInsertBuilder(h.dialect, "host_notifications", notification.WorkspaceID).
-		Columns("id", "event_type", "subject_id").Values(notification.ID, notification.EventType, notification.SubjectID).Build()
+		Columns("source_event_id", "event_type", "subject_id").Values(notification.SourceEventID, notification.EventType, notification.SubjectID).Build()
 	if err != nil {
 		return err
 	}
@@ -457,20 +458,28 @@ func (h *integrationHost) PrepareReportExport(ctx context.Context, request repor
 	if err != nil {
 		return reportmodel.ReportExportJob{}, err
 	}
-	digest := sha256.Sum256([]byte(subject.Principal.WorkspaceID + "\x00" + request.IdempotencyKey))
 	clockNow := h.ReportClock()()
 	now := clockNow.Format(time.RFC3339Nano)
-	job := reportmodel.ReportExportJob{
-		ID: "job_" + hex.EncodeToString(digest[:12]), AuditID: request.AuditID, ReportKey: request.ReportKey,
-		ObjectKey: request.ObjectKey, Status: "queued", Scope: request.Scope, CreatedAt: now, UpdatedAt: now,
-	}
-	statement, arguments, err := ormquery.NewWorkspaceInsertBuilder(h.dialect, "host_export_jobs", subject.Principal.WorkspaceID).
-		Columns("id", "idempotency_key", "audit_id", "report_key", "object_key", "status", "scope_json", "created_at", "updated_at").
-		Values(job.ID, request.IdempotencyKey, request.AuditID, request.ReportKey, request.ObjectKey, job.Status, string(scopeJSON), clockNow.UnixMilli(), clockNow.UnixMilli()).Build()
+	jobID, err := entityid.Derive("job", "report.export", subject.Principal.WorkspaceID, request.IdempotencyKey)
 	if err != nil {
 		return reportmodel.ReportExportJob{}, err
 	}
-	if _, err := transaction.ExecContext(ctx, statement, arguments...); err != nil {
+	job := reportmodel.ReportExportJob{
+		JobID: jobID, AuditID: request.AuditID, ReportKey: request.ReportKey,
+		ObjectKey: request.ObjectKey, Status: "queued", Scope: request.Scope, CreatedAt: now, UpdatedAt: now,
+	}
+	statement, arguments, err := ormquery.NewWorkspaceInsertBuilder(h.dialect, "host_export_jobs", subject.Principal.WorkspaceID).
+		Columns("job_id", "idempotency_key", "audit_id", "report_key", "object_key", "status", "scope_json", "created_at", "updated_at").
+		Values(job.JobID, request.IdempotencyKey, request.AuditID, request.ReportKey, request.ObjectKey, job.Status, string(scopeJSON), clockNow.UnixMilli(), clockNow.UnixMilli()).Build()
+	if err != nil {
+		return reportmodel.ReportExportJob{}, err
+	}
+	result, err := transaction.ExecContext(ctx, statement, arguments...)
+	if err != nil {
+		return reportmodel.ReportExportJob{}, err
+	}
+	job.ID, err = result.LastInsertId()
+	if err != nil {
 		return reportmodel.ReportExportJob{}, err
 	}
 	if h.failNextExport.CompareAndSwap(true, false) {
@@ -484,7 +493,7 @@ func (h *integrationHost) PrepareReportExport(ctx context.Context, request repor
 
 func (h *integrationHost) exportJobByIdempotency(ctx context.Context, executor modulehost.DBTX, workspaceID, idempotencyKey string) (reportmodel.ReportExportJob, bool, error) {
 	statement, arguments, err := ormquery.NewWorkspaceSelectBuilder(h.dialect, "host_export_jobs", workspaceID).
-		Columns("id", "audit_id", "report_key", "object_key", "status", "scope_json", "created_at", "updated_at").
+		Columns("id", "job_id", "audit_id", "report_key", "object_key", "status", "scope_json", "created_at", "updated_at").
 		Where(ormquery.Equal("idempotency_key", idempotencyKey)).Limit(1).Build()
 	if err != nil {
 		return reportmodel.ReportExportJob{}, false, err
@@ -492,7 +501,7 @@ func (h *integrationHost) exportJobByIdempotency(ctx context.Context, executor m
 	var job reportmodel.ReportExportJob
 	var scopeJSON string
 	var createdAt, updatedAt int64
-	err = executor.QueryRowContext(ctx, statement, arguments...).Scan(&job.ID, &job.AuditID, &job.ReportKey, &job.ObjectKey, &job.Status, &scopeJSON, &createdAt, &updatedAt)
+	err = executor.QueryRowContext(ctx, statement, arguments...).Scan(&job.ID, &job.JobID, &job.AuditID, &job.ReportKey, &job.ObjectKey, &job.Status, &scopeJSON, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return reportmodel.ReportExportJob{}, false, nil
 	}
@@ -568,13 +577,13 @@ func integrationHostTables(renderer modulehost.Dialect) []*ormschema.TableBuilde
 			required("status", ormschema.TextKey(64)), required("amount", ormschema.Decimal(19, 2)), required("updated_at", ormschema.BigInt()),
 		).PrimaryKey("id").Unique("workspace_id", "id"),
 		ormschema.NewTable(renderer, "host_export_jobs").IfNotExists().Columns(
-			required("workspace_id", ormschema.TextKey(191)), required("id", ormschema.TextKey(191)), required("idempotency_key", ormschema.TextKey(191)),
+			ormschema.Column("id", ormschema.BigInt()).NotNull().AutoIncrement(), required("workspace_id", ormschema.TextKey(191)), required("job_id", ormschema.TextKey(96)), required("idempotency_key", ormschema.TextKey(191)),
 			required("audit_id", ormschema.TextKey(191)), required("report_key", ormschema.TextKey(191)), required("object_key", ormschema.TextKey(191)),
 			required("status", ormschema.TextKey(32)), required("scope_json", ormschema.LongText()), required("created_at", ormschema.BigInt()), required("updated_at", ormschema.BigInt()),
-		).PrimaryKey("id").Unique("workspace_id", "idempotency_key"),
+		).PrimaryKey("id").Unique("job_id").Unique("workspace_id", "idempotency_key"),
 		ormschema.NewTable(renderer, "host_notifications").IfNotExists().Columns(
-			required("workspace_id", ormschema.TextKey(191)), required("id", ormschema.TextKey(255)), required("event_type", ormschema.TextKey(191)), required("subject_id", ormschema.TextKey(191)),
-		).PrimaryKey("id"),
+			ormschema.Column("id", ormschema.BigInt()).NotNull().AutoIncrement(), required("workspace_id", ormschema.TextKey(191)), required("source_event_id", ormschema.TextKey(255)), required("event_type", ormschema.TextKey(191)), required("subject_id", ormschema.TextKey(191)),
+		).PrimaryKey("id").Unique("workspace_id", "source_event_id"),
 		ormschema.NewTable(renderer, "host_report_audit").IfNotExists().Columns(
 			required("workspace_id", ormschema.TextKey(191)), required("id", ormschema.TextKey(191)), required("report_key", ormschema.TextKey(191)), required("row_count", ormschema.BigInt()),
 		).PrimaryKey("id"),
@@ -795,7 +804,7 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if job.ID == "" || job.Status != "queued" || job.Scope.Parameters["status"] != "paid" {
+		if job.ID == 0 || job.JobID == "" || job.Status != "queued" || job.Scope.Parameters["status"] != "paid" {
 			t.Fatalf("export job=%#v", job)
 		}
 		workerRequest := reportmodel.ReportExportExecutionRequest{ReportKey: request.ReportKey, ObjectKey: request.ObjectKey, Scope: job.Scope, Page: reportmodel.ReportPageRequest{PageSize: 1}}
@@ -864,10 +873,10 @@ func TestPublicModuleFacadeRunsRealHostDatabaseReportLifecycle(t *testing.T) {
 				t.Fatal(value.err)
 			}
 			if jobID == "" {
-				jobID = value.job.ID
+				jobID = value.job.JobID
 			}
-			if value.job.ID != jobID {
-				t.Fatalf("concurrent job ID=%q want=%q", value.job.ID, jobID)
+			if value.job.JobID != jobID {
+				t.Fatalf("concurrent job ID=%q want=%q", value.job.JobID, jobID)
 			}
 		}
 		if rows := integrationExportRows(t, host, "concurrent-key"); rows != 1 {

@@ -125,7 +125,7 @@ func (s *SnapshotService) Refresh(ctx context.Context, request reportmodel.Repor
 
 func snapshotModel(snapshot reportpersistence.Snapshot) (reportmodel.ReportSnapshot, error) {
 	result := reportmodel.ReportSnapshot{
-		ID: snapshot.ID, WorkspaceID: snapshot.WorkspaceID, ReportKey: snapshot.ReportKey, AccessScopeHash: snapshot.AccessScopeHash,
+		ID: snapshot.ID, SnapshotID: snapshot.SnapshotID, WorkspaceID: snapshot.WorkspaceID, ReportKey: snapshot.ReportKey, AccessScopeHash: snapshot.AccessScopeHash,
 		IdempotencyKey: snapshot.IdempotencyKey, Status: snapshot.Status, Watermark: snapshot.Watermark,
 		SourceVersions: snapshot.SourceVersions, StartedAt: snapshot.StartedAt, RefreshedAt: snapshot.RefreshedAt,
 		ErrorCode: snapshot.ErrorCode, LeaseOwner: snapshot.LeaseOwner, LeaseExpiresAt: snapshot.LeaseExpiresAt, FencingToken: snapshot.FencingToken,
@@ -141,7 +141,7 @@ func snapshotModel(snapshot reportpersistence.Snapshot) (reportmodel.ReportSnaps
 func snapshotNotification(reportKey, idempotencyKey, status, errorCode string, subject reportmodel.ReportSubject, now time.Time) notificationmodel.NotificationIntent {
 	sourceID := "report-snapshot:" + strings.TrimSpace(reportKey) + ":" + strings.TrimSpace(idempotencyKey) + ":" + status
 	return notificationmodel.NotificationIntent{
-		ID: sourceID, WorkspaceID: subject.Principal.WorkspaceID, SourceEventID: sourceID, EventType: "report.snapshot." + status,
+		WorkspaceID: subject.Principal.WorkspaceID, SourceEventID: sourceID, EventType: "report.snapshot." + status,
 		RecipientUserIDs: []string{subject.Principal.UserID}, SubjectType: "report",
 		SubjectID: strings.TrimSpace(reportKey), SubjectVersion: strings.TrimSpace(idempotencyKey) + ":" + status,
 		DedupeKey: sourceID, OccurredAt: now.UTC().Format(time.RFC3339Nano),

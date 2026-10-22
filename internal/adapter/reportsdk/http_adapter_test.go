@@ -66,12 +66,12 @@ type reportHTTPExports struct {
 
 func (e *reportHTTPExports) Prepare(_ context.Context, request reportmodel.ReportExportPrepareRequest, _ reportmodel.ReportAuthority) (reportmodel.ReportExportJob, error) {
 	e.prepareRequest = request
-	return reportmodel.ReportExportJob{ID: "job-1"}, nil
+	return reportmodel.ReportExportJob{JobID: "job-1"}, nil
 }
 
 func (e *reportHTTPExports) PrepareForDelivery(_ context.Context, request reportmodel.ReportExportPrepareRequest, _ reportmodel.ReportAuthority) (reportmodel.ReportExportPreparation, error) {
 	e.prepareRequest = request
-	return reportmodel.ReportExportPreparation{Job: reportmodel.ReportExportJob{ID: "job-1"}, Artifact: e.artifact}, nil
+	return reportmodel.ReportExportPreparation{Job: reportmodel.ReportExportJob{JobID: "job-1"}, Artifact: e.artifact}, nil
 }
 
 func (*reportHTTPExports) ResolveExecution(context.Context, reportmodel.ReportExportExecutionRequest, reportmodel.ReportAuthority) (reportmodel.ReportExportExecution, error) {
@@ -169,7 +169,7 @@ func TestReportHTTPAdapterRejectsTrailingJSONAndForwardsCallerProof(t *testing.T
 	}
 
 	exports.artifact = &reportmodel.ReportExportArtifact{
-		ID: "artifact-1", Filename: "sales.csv", ContentType: "text/csv; charset=utf-8", ContentSHA256: "abc123", Size: 14,
+		ArtifactID: "artifact-1", Filename: "sales.csv", ContentType: "text/csv; charset=utf-8", ContentSHA256: "abc123", Size: 14,
 		Content: io.NopCloser(strings.NewReader("id,name\n1,one\n")),
 	}
 	request = httptest.NewRequest(http.MethodPost, "/report/sales/exports/order/prepare", strings.NewReader(`{"audit_id":"audit-2","scope":{"purpose":"test","freshness":{"mode":"realtime"}}}`))

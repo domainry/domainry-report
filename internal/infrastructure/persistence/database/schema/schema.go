@@ -64,7 +64,7 @@ func reportSnapshotLatestIndex(driver ormdialect.Name, renderer modulehost.Diale
 
 func reportSnapshotTable(renderer modulehost.Dialect) *ormschema.TableBuilder {
 	return ormschema.NewTable(renderer, SnapshotTableName).IfNotExists().Columns(
-		required("id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)),
+		ormschema.Column("id", ormschema.BigInt()).NotNull().AutoIncrement(), required("snapshot_id", ormschema.TextKey(96)), required("workspace_id", ormschema.TextKey(191)),
 		required("report_key", ormschema.TextKey(191)), required("access_scope_hash", ormschema.TextKey(191)),
 		required("idempotency_key", ormschema.TextKey(191)), required("status", ormschema.TextKey(32)),
 		required("summary_json", ormschema.LongText()), required("watermark", ormschema.TextKey(255)),
@@ -73,13 +73,13 @@ func reportSnapshotTable(renderer modulehost.Dialect) *ormschema.TableBuilder {
 		ormschema.Column("refreshed_at", ormschema.BigInt()), required("error_code", ormschema.TextKey(255)),
 		required("lease_owner", ormschema.TextKey(255)), ormschema.Column("lease_expires_at", ormschema.BigInt()),
 		required("fencing_token", ormschema.BigInt()),
-	).PrimaryKey("id").Unique("workspace_id", "id").Unique("workspace_id", "report_key", "access_scope_hash", "idempotency_key")
+	).PrimaryKey("id").Unique("snapshot_id").Unique("workspace_id", "report_key", "access_scope_hash", "idempotency_key")
 }
 
 func SchemaOwnership() []schemaownership.Table {
 	return []schemaownership.Table{{
-		Name: SnapshotTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
-		RetentionClass: schemaownership.RetentionProduct, PrimaryKey: []string{"id"},
+		Name: SnapshotTableName, Owner: MigrationOwner, Kind: schemaownership.KindEntity, WorkspaceScope: schemaownership.ScopeWorkspace,
+		RetentionClass: schemaownership.RetentionProduct, PrimaryKey: []string{"id"}, EntityIDColumn: "snapshot_id", EntityIDPrefix: "rptsnap", BusinessKey: []string{"snapshot_id"},
 		BoundedQueryPath: "workspace plus report and access-scope identity; latest and idempotency lookups are limited to one row",
 		DeletionPolicy:   "snapshots remain as product analytical history; no physical purge path is currently registered",
 	}}

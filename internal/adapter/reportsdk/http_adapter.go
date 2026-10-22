@@ -178,7 +178,7 @@ func (s *reportHTTPAdapter) prepareExport(w http.ResponseWriter, r *http.Request
 		writeReportError(w, err)
 		return
 	}
-	w.Header().Set("Location", "/data-exchange/jobs/"+result.Job.ID+"?provider=reports&operation=export")
+	w.Header().Set("Location", "/data-exchange/jobs/"+result.Job.JobID+"?provider=reports&operation=export")
 	if result.Artifact == nil {
 		writeReportJSON(w, http.StatusAccepted, result.Job)
 		return
@@ -203,7 +203,7 @@ func writePreparedReportExport(w http.ResponseWriter, job reportmodel.ReportExpo
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
 	w.Header().Set("Cache-Control", "no-store, private")
-	w.Header().Set("X-Report-Export-Job-ID", job.ID)
+	w.Header().Set("X-Report-Export-Job-ID", job.JobID)
 	if artifact.ContentSHA256 != "" {
 		w.Header().Set("ETag", `"sha256:`+artifact.ContentSHA256+`"`)
 	}

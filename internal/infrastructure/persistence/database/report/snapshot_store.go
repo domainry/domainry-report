@@ -2,14 +2,13 @@ package report
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/domainry/domainry-foundation/entityid"
 	"github.com/domainry/domainry-orm/query"
 	"github.com/domainry/domainry-report-sdk/modulehost"
 	reportpersistence "github.com/domainry/domainry-report-sdk/persistence"
@@ -78,8 +77,11 @@ func (s *ReportSnapshotStore) Claim(ctx context.Context, request reportpersisten
 		}
 		return reportSnapshotInactiveClaim(claimed), nil
 	}
-	id := reportSnapshotID(request)
-	queryValue, args, buildErr := query.NewWorkspaceInsertBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Columns("id", "report_key", "access_scope_hash", "idempotency_key", "status", "summary_json", "watermark", "source_versions_json", "row_count", "source_row_count", "started_at", "refreshed_at", "error_code", "lease_owner", "lease_expires_at", "fencing_token").Values(id, request.ReportKey, request.AccessScopeHash, request.IdempotencyKey, "refreshing", "{}", "", "{}", 0, 0, startedAt, nil, "", request.LeaseOwner, leaseExpiresAt, 1).Build()
+	snapshotID, idErr := entityid.New("rptsnap")
+	if idErr != nil {
+		return reportpersistence.SnapshotClaim{}, idErr
+	}
+	queryValue, args, buildErr := query.NewWorkspaceInsertBuilder(s.host.Dialect(), reportschema.SnapshotTableName, request.WorkspaceID).Columns("snapshot_id", "report_key", "access_scope_hash", "idempotency_key", "status", "summary_json", "watermark", "source_versions_json", "row_count", "source_row_count", "started_at", "refreshed_at", "error_code", "lease_owner", "lease_expires_at", "fencing_token").Values(snapshotID, request.ReportKey, request.AccessScopeHash, request.IdempotencyKey, "refreshing", "{}", "", "{}", 0, 0, startedAt, nil, "", request.LeaseOwner, leaseExpiresAt, 1).Build()
 	if buildErr != nil {
 		return reportpersistence.SnapshotClaim{}, buildErr
 	}
@@ -90,7 +92,10 @@ func (s *ReportSnapshotStore) Claim(ctx context.Context, request reportpersisten
 		}
 		return reportpersistence.SnapshotClaim{}, err
 	}
-	snapshot := reportpersistence.Snapshot{ID: id, WorkspaceID: request.WorkspaceID, ReportKey: request.ReportKey, AccessScopeHash: request.AccessScopeHash, IdempotencyKey: request.IdempotencyKey, Status: "refreshing", StartedAt: request.StartedAt, LeaseOwner: request.LeaseOwner, LeaseExpiresAt: request.LeaseExpiresAt, FencingToken: 1}
+	snapshot, found, readErr := s.reportSnapshotByIdempotency(ctx, request)
+	if readErr != nil || !found {
+		return reportpersistence.SnapshotClaim{}, readErr
+	}
 	return reportSnapshotClaim(snapshot, reportpersistence.SnapshotClaimAcquired), nil
 }
 
@@ -173,7 +178,7 @@ func (s *ReportSnapshotStore) reportSnapshotByIdempotency(ctx context.Context, r
 }
 
 func reportSnapshotStoreColumns() []string {
-	return []string{"id", "workspace_id", "report_key", "access_scope_hash", "idempotency_key", "status", "summary_json", "watermark", "source_versions_json", "started_at", "refreshed_at", "error_code", "lease_owner", "lease_expires_at", "fencing_token"}
+	return []string{"id", "snapshot_id", "workspace_id", "report_key", "access_scope_hash", "idempotency_key", "status", "summary_json", "watermark", "source_versions_json", "started_at", "refreshed_at", "error_code", "lease_owner", "lease_expires_at", "fencing_token"}
 }
 
 func reportSnapshotScan(row *sql.Row) (reportpersistence.Snapshot, bool, error) {
@@ -181,7 +186,7 @@ func reportSnapshotScan(row *sql.Row) (reportpersistence.Snapshot, bool, error) 
 	var summaryJSON, versionsJSON string
 	var startedAt int64
 	var refreshedAt, leaseExpiresAt sql.NullInt64
-	err := row.Scan(&snapshot.ID, &snapshot.WorkspaceID, &snapshot.ReportKey, &snapshot.AccessScopeHash, &snapshot.IdempotencyKey, &snapshot.Status, &summaryJSON, &snapshot.Watermark, &versionsJSON, &startedAt, &refreshedAt, &snapshot.ErrorCode, &snapshot.LeaseOwner, &leaseExpiresAt, &snapshot.FencingToken)
+	err := row.Scan(&snapshot.ID, &snapshot.SnapshotID, &snapshot.WorkspaceID, &snapshot.ReportKey, &snapshot.AccessScopeHash, &snapshot.IdempotencyKey, &snapshot.Status, &summaryJSON, &snapshot.Watermark, &versionsJSON, &startedAt, &refreshedAt, &snapshot.ErrorCode, &snapshot.LeaseOwner, &leaseExpiresAt, &snapshot.FencingToken)
 	if err == sql.ErrNoRows {
 		return reportpersistence.Snapshot{}, false, nil
 	}
@@ -209,13 +214,8 @@ func reportSnapshotRequestValid(request reportpersistence.SnapshotBeginRequest) 
 	return nil
 }
 
-func reportSnapshotFencePredicate(id, status, leaseOwner string, fencingToken int64) query.Predicate {
+func reportSnapshotFencePredicate(id int64, status, leaseOwner string, fencingToken int64) query.Predicate {
 	return query.And(query.Equal("id", id), query.Equal("status", status), query.Equal("lease_owner", strings.TrimSpace(leaseOwner)), query.Equal("fencing_token", fencingToken))
-}
-
-func reportSnapshotID(request reportpersistence.SnapshotBeginRequest) string {
-	sum := sha256.Sum256([]byte(request.WorkspaceID + "\x00" + request.ReportKey + "\x00" + request.AccessScopeHash + "\x00" + request.IdempotencyKey))
-	return "rptsnap_" + hex.EncodeToString(sum[:16])
 }
 
 func reportSnapshotRequireAffected(result sql.Result) error {
