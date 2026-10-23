@@ -11,6 +11,7 @@ import (
 
 	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulehttp"
+	"github.com/domainry/domainry-foundation/requestcontext"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
@@ -144,7 +145,8 @@ func TestReportHTTPAdapterRejectsTrailingJSONAndForwardsCallerProof(t *testing.T
 
 	request := httptest.NewRequest(http.MethodPost, "/report/sales/query", strings.NewReader(`{"parameters":{"region":"west"},"page_size":25}`))
 	request.Header.Set("Authorization", "Bearer report-token")
-	request.Header.Set("X-Request-ID", "request-1")
+	request.Header.Set("X-Request-ID", "untrusted-upstream-request")
+	request = request.WithContext(requestcontext.WithRequestID(request.Context(), "request-1"))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {

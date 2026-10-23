@@ -14,6 +14,7 @@ import (
 	"github.com/domainry/domainry-foundation/apperror"
 	"github.com/domainry/domainry-foundation/httpresponse"
 	"github.com/domainry/domainry-foundation/modulehttp"
+	"github.com/domainry/domainry-foundation/requestcontext"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	sdk "github.com/domainry/domainry-report-sdk"
 	reportmodel "github.com/domainry/domainry-report-sdk/model"
@@ -229,7 +230,7 @@ func reportAuthority(r *http.Request) reportmodel.ReportAuthority {
 		}
 	}
 	return reportmodel.ReportAuthority{
-		AccessToken: token, RequestID: strings.TrimSpace(r.Header.Get("X-Request-ID")),
+		AccessToken: token, RequestID: requestcontext.RequestID(r.Context()),
 		BusinessProfileKey: strings.TrimSpace(r.Header.Get("X-Business-Profile-Key")), BusinessProfileID: strings.TrimSpace(r.Header.Get("X-Business-Profile-ID")),
 	}
 }

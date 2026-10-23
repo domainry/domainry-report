@@ -27,7 +27,7 @@ func NewBinding(service reportapplication.Service) (*Binding, error) {
 }
 
 func (*Binding) Descriptor() sdk.Descriptor {
-	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV3, Mode: sdk.DeploymentModeModule, Capabilities: []string{
+	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV4, Mode: sdk.DeploymentModeModule, Capabilities: []string{
 		sdk.CapabilityDefinitionsSync, sdk.CapabilityQueriesExecute, sdk.CapabilitySnapshotsManage, sdk.CapabilityExportsManage, sdk.CapabilityHTTPAdapter,
 	}}
 }
