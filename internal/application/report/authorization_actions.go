@@ -48,10 +48,30 @@ func reportAction(key, pattern, label string, effect actioncontract.EffectClass,
 		Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticated},
 		HTTP:          &actioncontract.HTTPBinding{Method: method, RouteTemplate: path},
 		Permission: &actioncontract.PermissionDefinition{
-			Key: key, Owner: AuthorizationOwner, ResourceKey: resourceKey, OperationKey: operationKey,
-			Label: label, Category: "Business reports", LifecycleStatus: actioncontract.LifecycleActive,
+			Key: key, Owner: AuthorizationOwner, ModuleKey: "report", GroupKey: reportsdk.CapabilityReportBusiness,
+			ResourceKey: resourceKey, OperationKey: operationKey, Label: label, Category: "Business reports",
+			GrantMode: actioncontract.PermissionGrantInternal, ScopeKind: actioncontract.PermissionScopeNone,
+			DefaultLocale: "en", I18n: reportPermissionText(resourceKey, operationKey, label),
+			LifecycleStatus: actioncontract.LifecycleActive,
 		},
 		EffectClass: effect, RiskLevel: risk, ApprovalPolicies: append([]actioncontract.ApprovalPolicy(nil), approvals...),
 		IdempotencyDecision: idempotency, AuditClass: audit, LifecycleStatus: actioncontract.LifecycleActive,
+	}
+}
+
+func reportPermissionText(resourceKey, operationKey, englishLabel string) actioncontract.PermissionLocalizedText {
+	resourceEnglish := map[string]string{
+		"report.summary": "Report summary", "report.query": "Report query", "report.snapshots": "Report snapshots",
+		"report.exports": "Report exports", "report.results": "Saved report results",
+	}[resourceKey]
+	resourceChinese := map[string]string{
+		"report.summary": "报表摘要", "report.query": "报表查询", "report.snapshots": "报表快照",
+		"report.exports": "报表导出", "report.results": "已保存的报表结果",
+	}[resourceKey]
+	operationEnglish := map[string]string{"get": "View", "execute": "Run query", "refresh": "Refresh", "prepare": "Prepare export", "read": "Read"}[operationKey]
+	operationChinese := map[string]string{"get": "查看", "execute": "执行查询", "refresh": "刷新", "prepare": "准备导出", "read": "读取"}[operationKey]
+	return actioncontract.PermissionLocalizedText{
+		"en":    {ModuleLabel: "Reports", GroupLabel: "Business reports", ResourceLabel: resourceEnglish, OperationLabel: operationEnglish, Label: englishLabel, Description: "Provides access to " + resourceEnglish + " for the “" + operationEnglish + "” operation."},
+		"zh-CN": {ModuleLabel: "报表", GroupLabel: "业务报表", ResourceLabel: resourceChinese, OperationLabel: operationChinese, Label: resourceChinese + " · " + operationChinese, Description: "允许对“" + resourceChinese + "”执行“" + operationChinese + "”操作。"},
 	}
 }
